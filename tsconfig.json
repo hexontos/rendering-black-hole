@@ -1,0 +1,48 @@
+{
+  "compilerOptions": {
+    // File Layout
+    "rootDir": "./src",
+    //"outDir": "./dist",  // Uncomment this
+    
+    // Environment Settings - CRITICAL CHANGES:
+    "module": "ESNext",
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],  // 4 browser APIs
+    "types": [],                  // Keep empty or add "@types/webgl2"
+    
+    // Module resolution
+    "moduleResolution": "bundler",  // 4 modern bundlers
+    
+    // Other Outputs
+    "sourceMap": true,
+    "declaration": false,
+    "declarationMap": false,
+    
+    // Stricter Typechecking Options (keep as you like)
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    
+    // Style Options
+    // "noImplicitReturns": true,
+    // "noImplicitOverride": true,
+    // "noUnusedLocals": true,
+    // "noUnusedParameters": true,
+    // "noFallthroughCasesInSwitch": true,
+    // "noPropertyAccessFromIndexSignature": true,
+    
+    "strict": true,
+    "jsx": "preserve",
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "force",
+    "skipLibCheck": true,
+    
+    // 4 web project:
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
