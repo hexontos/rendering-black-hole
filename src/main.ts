@@ -1,8 +1,9 @@
 const canvas = document.getElementById("blackhole-canvas") as HTMLCanvasElement;
-const ctx = canvas.getContext("2d") as CanvasRenderingContext2D | null;
-if (ctx === null) {
+const context = canvas.getContext("2d") as CanvasRenderingContext2D | null;
+if (context === null) {
     throw new Error("Context from canvas was not loaded.");
 }
+const ctx = context as CanvasRenderingContext2D;
 
 
 const HEIGHT = canvas.height;
@@ -12,7 +13,7 @@ const LIGHT_SPEED = 1; // 1 pixel
 class Light {
     x: number = 10;
     y: number = 10;
-    size: number = 10
+    size: number = 2
     vector: [number, number] = [1, 0];
     trail: [number, number][] = []; // array of tuples
 
@@ -45,6 +46,7 @@ const BlackHole = {
 };
 const b = BlackHole;
 
+
 ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2, false);
 ctx.fillStyle = b.color;
 ctx.fill();
@@ -52,18 +54,20 @@ ctx.stroke();
 
 
 // project light
-const projectedLight: Light[] = []; 
-for (var i: number = 1; i < HEIGHT / 100; i++) {
-    projectedLight.push(new Light(100, i * 100))
+const projectedLight: Light[] = [];
+const ArrayDistance = 70
+for (var i: number = 1; i < HEIGHT / ArrayDistance; i++) {
+    projectedLight.push(new Light(100, i * ArrayDistance))
 }
 
 
 let lastTime: number = 0;
 const fps: number = 60;
-const interval: number = 1000 / fps;
+const interval: number = 1500 / fps;
 
 function animate(timestamp: number) {
     const deltaTime = timestamp - lastTime;
+
 
     ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2, false);
     ctx.fillStyle = b.color;
@@ -72,13 +76,37 @@ function animate(timestamp: number) {
 
     if (deltaTime > interval) {
         // Clear the canvas
+
         ctx.clearRect(0, 0, WIDTH, HEIGHT);
         
         // light projectiles
-        ctx.fillStyle = "white"
         for (const l of projectedLight) {
             const [x, y, s] = l.getPosBasedOnSize();
-            ctx.fillRect(x, y, s, s);
+
+            // stop wasting compute protection
+            if (Math.abs(x) > WIDTH * 10 || Math.abs(y) > HEIGHT * 10) {
+                continue;
+            }
+
+            // collision
+            const dx = b.x - x; // treat photon as circle despite drawing it as rect
+            const dy = b.y - y;
+            const distance = Math.sqrt(dx *dx + dy * dy);
+            if (distance <= b.r) {
+                l.vector = [0, 0]
+            } else {
+                // add to trail
+                l.trail.push([x, y]);
+            }
+
+            // draw whole tail
+            const stepLightIncrement: number = 1 / l.trail.length;
+            var stepLight: number = stepLightIncrement;
+            for (const [x, y] of l.trail) {
+                ctx.fillStyle = `rgba(255, 255, 255, ${stepLight})`;
+                ctx.fillRect(x, y, s, s);
+                stepLight += stepLightIncrement;
+            }
             
             // Update pos
             l.x += l.size * l.vector[0];
