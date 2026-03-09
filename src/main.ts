@@ -10,10 +10,15 @@ const HEIGHT = canvas.height;
 const WIDTH = canvas.width;
 const LIGHT_SPEED = 1; // 1 pixel
 
-class Light {
+class Ray {
+    // coords
     x: number = 10;
     y: number = 10;
-    size: number = 2
+    size: number = 2;
+    // polar coords
+    r: number = Math.hypot(this.x, this.y);
+    phi: number = Math.atan2(this.y, this.x);
+
     vector: [number, number] = [1, 0];
     trail: [number, number][] = []; // array of tuples
 
@@ -27,10 +32,20 @@ class Light {
         return [this.x - (this.size / 2), this.y - (this.size / 2), this.size];
     }
 
-    move() {
+    getPolarCoords (): [number, number] {
+        //this.r = Math.hypot(this.x, this.y);
+        //this.phi = Math.atan2(this.y, this.x);
+        return [this.r, this.phi];
+    }
+
+    step(b_r: number) {
+        // collision
+        if (this.r < b_r) {
+            return
+        }
         this.x += this.vector[0];
         this.y += this.vector[1];
-        this.trail.push([this.x, this.y]);
+        this.trail.push([this.x, this.y])
     }
 
 
@@ -54,10 +69,10 @@ ctx.stroke();
 
 
 // project light
-const projectedLight: Light[] = [];
+const projectedLight: Ray[] = [];
 const ArrayDistance = 70
 for (var i: number = 1; i < HEIGHT / ArrayDistance; i++) {
-    projectedLight.push(new Light(100, i * ArrayDistance))
+    projectedLight.push(new Ray(100, i * ArrayDistance))
 }
 
 
@@ -88,16 +103,7 @@ function animate(timestamp: number) {
                 continue;
             }
 
-            // collision
-            const dx = b.x - x; // treat photon as circle despite drawing it as rect
-            const dy = b.y - y;
-            const distance = Math.sqrt(dx *dx + dy * dy);
-            if (distance <= b.r) {
-                l.vector = [0, 0]
-            } else {
-                // add to trail
-                l.trail.push([x, y]);
-            }
+            l.step(b.r);
 
             // draw whole tail
             const stepLightIncrement: number = 1 / l.trail.length;
@@ -107,10 +113,6 @@ function animate(timestamp: number) {
                 ctx.fillRect(x, y, s, s);
                 stepLight += stepLightIncrement;
             }
-            
-            // Update pos
-            l.x += l.size * l.vector[0];
-            l.y += l.size * l.vector[1];
         }
     }
     
