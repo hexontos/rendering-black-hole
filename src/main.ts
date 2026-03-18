@@ -92,27 +92,24 @@ class Ray {
     }
 
     step(b: BlackHole) {
-        // collision of two circles Ray x BlackHole:
-        //const d = Math.hypot(this.pos.x - b.pos.x, this.pos.y - b.pos.y);
-        //if (d <= (this.size + b.r)) { // true if collision
-        //    return;
-        //}
-        //this.pos.x += this.dir.x;
-        //this.pos.y += this.dir.y;
-        //this.trail.push(this.pos)
-
         const dλ: number = 1.0;
         const rs: number = b.schwarzschildRadius;
 
+        if (this.r <= b.schwarzschildRadius) return; // Robin Stooop it if inside the event horizon
+
         // integrate (r,φ,dr,dφ)
-        if (this.r <= b.schwarzschildRadius) return; // stop if inside the event horizon
+        function RungeKutta4 (): void {
 
-        //rk4Step
+        }
 
+        function geodesicRHS (): void { // compute light bending
 
+        }
 
-        //const x = this.r * Math.cos(this.phi);
-        //const y = this.r * Math.sin(this.phi);
+        // DO ME
+        function rk4Step (): void {
+
+        }
 
         // record the trail
         this.trail.push(this.pos);
