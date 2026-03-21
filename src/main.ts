@@ -24,12 +24,14 @@ type Position2 = Vector2;
 const vec2 = (x: number, y: number) => ({x, y} satisfies Vector2)
 const pos2 = vec2
 
+type SchwarzschildRadius = number;
+
 // except Ray and BlackHole, use struct / function programming (for 3d use purely)
 
 class BlackHole {
     public pos: Vector2;
     public mass: number
-    public schwarzschildRadius: number
+    public schwarzschildRadius: SchwarzschildRadius
     public gravity: number
 
     public r: number
@@ -97,32 +99,94 @@ class Ray {
 
         if (this.r <= b.schwarzschildRadius) return; // Robin Stooop it if inside the event horizon
 
-        // integrate (r,φ,dr,dφ)
-        function RungeKutta4 (): void {
+        type fourStates = [number, number, number, number];
 
+        // integrate (r,φ,dr,dφ)
+        const RungeKutta4 = (a: fourStates, b: fourStates, factor: number, out: fourStates): void => {
+            out[0] = a[0] + b[0] * factor;
+            out[1] = a[1] + b[1] * factor;
+            out[2] = a[2] + b[2] * factor;
+            out[3] = a[3] + b[3] * factor;
         }
 
-        function geodesicRHS (): void { // compute light bending
+        const updateCurrentValues = (ray: Ray, update: fourStates): void => {
+            ray.r = update[0];
+            ray.phi = update[1];
+            ray.dr = update[2];
+            ray.dphi = update[3];
+        }
 
+        const geodesicRHS = (ray: Ray, rhs: fourStates, rs: SchwarzschildRadius): void => { // compute light bending
+            const r: number = ray.r;
+            const dr: number = ray.dr;
+            const dphi: number = ray.dr;
+            const E: number = ray.E
+            
+            
+            const f: number = 1.0 - rs / r;
+
+            rhs[0] = dr; // dr/dλ = dr
+            rhs[1] = dphi; // dφ/dλ = dphi
+            
+            // d²r/dλ² from Schwarzschild null geodesic:
+            const dt_dλ: number = E / f;
+            rhs[2] = -(rs / (2*r**2)) * f * (dt_dλ**2) + (rs / (2*r**2*f)) * (dr**2) + (r - rs) * (dphi**2);
+
+            // d²φ/dλ² = -2*(dr * dphi) / r
+            rhs[3] = -2.0 * dr * dphi / r;
         }
 
         // DO ME
-        function rk4Step (): void {
+        const rk4Step = (dλ: number, rs: SchwarzschildRadius): void => {
+            const y: fourStates = [this.r, this.phi, this.dr, this.dphi];
+            const k1: fourStates = [0, 0, 0, 0];
+            const temp: fourStates = [0, 0, 0, 0];
 
+            geodesicRHS(this, k1, rs);
+            RungeKutta4(y, k1, dλ/2.0, temp);
+            
+            const r2 = new Ray(this.pos, this.dir);
+            updateCurrentValues(r2, temp);
+            const k2: fourStates = [0, 0, 0, 0];
+            geodesicRHS(r2, k2, rs);
+            RungeKutta4(y, k2, dλ/2.0, temp);
+
+            const r3 = new Ray(this.pos, this.dir);
+            updateCurrentValues(r3, temp);
+            const k3: fourStates = [0, 0, 0, 0];
+            geodesicRHS(r3, k3, rs);
+            RungeKutta4(y, k3, dλ/2.0, temp);
+
+            const r4 = new Ray(this.pos, this.dir);
+            updateCurrentValues(r4, temp);
+            const k4: fourStates = [0, 0, 0, 0];
+            geodesicRHS(r4, k4, rs);
+
+            this.r += (dλ / 6.0) * (k1[0] + 2*k2[0] + 2*k3[0] + k4[0]);
+            this.phi  += (dλ / 6.0) * (k1[1] + 2*k2[1] + 2*k3[1] + k4[1]);
+            this.dr   += (dλ / 6.0) * (k1[2] + 2*k2[2] + 2*k3[2] + k4[2]);
+            this.dphi += (dλ / 6.0) * (k1[3] + 2*k2[3] + 2*k3[3] + k4[3]);
         }
+
+        rk4Step(dλ, rs);
 
         // record the trail
         this.trail.push(this.pos);
     }
 
 
-    draw() {
-        const x = this.pos.x - (this.size / 2);
-        const y = this.pos.y - (this.size / 2);
-        const s = this.size
-
+    draw(ctx: CanvasRenderingContext2D) {
         const stepLightIncrement: number = 1 / this.trail.length;
         var stepLight: number = stepLightIncrement;
+        for (const l of this.trail) {
+            const x = l.x - (this.size / 2);
+            const y = l.y - (this.size / 2);
+            const s = this.size
+
+            ctx.fillStyle = `rgba(255, 255, 255, ${stepLight})`;
+            stepLight += stepLightIncrement;
+            ctx.strokeRect(x, y, x+s, y+s);
+        }
     }
 }
 // init Rays
@@ -154,7 +218,7 @@ function animate(timestamp: number) {
         // light projectiles
         for (const l of projectedLight) {
                 l.step(b);
-                l.draw();
+                l.draw(ctx);
             }
         }
     
