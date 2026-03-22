@@ -26,8 +26,6 @@ const pos2 = vec2
 
 type SchwarzschildRadius = number;
 
-// except Ray and BlackHole, use struct / function programming (for 3d use purely)
-
 const WORLD_CENTER = vec2(0.0, 0.0);
 const SCREEN_CENTER = vec2(SCREEN_WIDTH * 0.5, SCREEN_HEIGHT * 0.5);
 const SCALE_X = SCREEN_WIDTH / (SIM_WIDTH * 2.0);
@@ -39,6 +37,13 @@ const worldToScreen = (p: Vector2): Vector2 => {
     return vec2(
         SCREEN_CENTER.x + p.x * SCALE,
         SCREEN_CENTER.y - p.y * SCALE
+    );
+};
+
+const screenToWorld = (p: Vector2): Vector2 => {
+    return vec2(
+        (p.x - SCREEN_CENTER.x) / SCALE,
+        (SCREEN_CENTER.y - p.y) / SCALE
     );
 };
 
@@ -140,6 +145,8 @@ class Ray {
     // cartesian
     pos: Vector2;
     dir: Vector2;
+    origin: Vector2;
+    localPos: Vector2;
     // polar coords
     r: number;
     phi: number;
@@ -158,9 +165,11 @@ class Ray {
         // cartesian
         this.pos = position;
         this.dir = direction;
+        this.origin = vec2(primaryBlackHole.pos.x, primaryBlackHole.pos.y);
+        this.localPos = vec2(this.pos.x - this.origin.x, this.pos.y - this.origin.y);
         // polar coords
-        this.r = Math.hypot(this.pos.x, this.pos.y);
-        this.phi = Math.atan2(this.pos.y, this.pos.x);
+        this.r = Math.hypot(this.localPos.x, this.localPos.y);
+        this.phi = Math.atan2(this.localPos.y, this.localPos.x);
         // seed velocities
         this.dr = this.dir.x * Math.cos(this.phi) + this.dir.y * Math.sin(this.phi); // m / s
         this.dphi = (-this.dir.x * Math.sin(this.phi) + this.dir.y * Math.cos(this.phi)) / this.r;
@@ -169,7 +178,8 @@ class Ray {
         const f: number = 1.0 - primaryBlackHole.schwarzschildRadius / this.r;
         const dt_dλ: number = Math.sqrt((this.dr**2) / (f**2) + ((this.r**2) * (this.dphi**2)) / f);
         this.E = f * dt_dλ;
-        // start trail
+
+        
         this.trail.push(vec2(this.pos.x, this.pos.y));
     }
 
@@ -186,8 +196,9 @@ class Ray {
         for (let i = 0; i < subSteps; i++) {
             integrator.step(this, dλ, rs);
 
-            // convert back to cartesian
-            this.pos = vec2(this.r * Math.cos(this.phi), this.r * Math.sin(this.phi));
+            // convert back to cartesian (local -> world)
+            this.localPos = vec2(this.r * Math.cos(this.phi), this.r * Math.sin(this.phi));
+            this.pos = vec2(this.origin.x + this.localPos.x, this.origin.y + this.localPos.y);
 
             // record the trail
             this.trail.push(vec2(this.pos.x, this.pos.y));
@@ -236,6 +247,9 @@ class Simulation {
     private interval: number;
     private lastTime: number = 0;
     private frameCount: number = 0;
+    private halted: boolean = false;
+    private frameSafetyLimit: number = 5000;
+    private haltWarned: boolean = false;
 
     constructor(blackHoles: BlackHole[], raySubSteps: number, fps: number) {
         this.blackHoles = blackHoles;
@@ -248,13 +262,46 @@ class Simulation {
         this.rays.push(ray);
     }
 
+    addRays(rays: Ray[]): void {
+        for (const ray of rays) {
+            this.rays.push(ray);
+        }
+    }
+
+    clearRays(): void {
+        this.rays = [];
+    }
+
+    setBlackHoles(holes: BlackHole[]): void {
+        this.blackHoles = holes;
+    }
+
+    getPrimaryBlackHole(): BlackHole | null {
+        return this.blackHoles[0] ?? null;
+    }
+
+    resetTiming(): void {
+        this.lastTime = 0;
+        this.frameCount = 0;
+        this.halted = false;
+        this.haltWarned = false;
+    }
+
     private updateRays(): void {
-        const subStepsPer = Math.max(1, Math.floor(this.raySubSteps / this.blackHoles.length));
+        const primary = this.blackHoles[0];
+        if (!primary) return;
+        const subStepsPer = this.raySubSteps;
+        const others = this.blackHoles.slice(1);
+
         for (const ray of this.rays) {
             if (!ray.active) continue;
-            for (const hole of this.blackHoles) {
-                if (!ray.active) break;
-                ray.step(hole, this.integrator, subStepsPer);
+            ray.step(primary, this.integrator, subStepsPer);
+            if (!ray.active) continue;
+            for (const hole of others) {
+                if (ray.isInside(hole)) {
+                    ray.active = false;
+                    break;
+                }
             }
         }
     }
@@ -287,6 +334,18 @@ class Simulation {
                 return;
             }
 
+            if (this.frameCount >= this.frameSafetyLimit) {
+                this.halted = true;
+                if (!this.haltWarned) {
+                    console.warn("Simulation halted: frame safety limit reached.");
+                    this.haltWarned = true;
+                }
+            }
+            if (this.halted) {
+                requestAnimationFrame(tick);
+                return;
+            }
+
             this.lastTime = timestamp - (deltaTime % this.interval);
             this.updateRays();
             this.drawScene(ctx);
@@ -297,10 +356,110 @@ class Simulation {
     }
 }
 
-const sim = new Simulation([b], 8, 60);
-const ArrayDistance = SIM_HEIGHT / 8.0;
-for (var i: number = -6; i <= 6; i++) {
-    sim.addRay(new Ray(pos2(-SIM_WIDTH, i * ArrayDistance), vec2(C, 0), b));
-}
+const RAY_COUNT: number = 13;
+const RAY_SPACING = SIM_HEIGHT / 9;
+const LEFT_EDGE = -SIM_WIDTH;
+const TOP_EDGE = SIM_HEIGHT;
+const COMPACT_RAY_COUNT: number = 15;
+const COMPACT_ANGLE_SPREAD = 0.01; // radians
+const COMPACT_ORIGIN = vec2(LEFT_EDGE, SIM_HEIGHT * 0.1);
 
+const buildSideRays = (primary: BlackHole): Ray[] => {
+    const rays: Ray[] = [];
+    const half = Math.floor(RAY_COUNT / 2);
+    for (let i = -half; i <= half; i++) {
+        rays.push(new Ray(pos2(LEFT_EDGE, i * RAY_SPACING), vec2(C, 0), primary));
+    }
+    return rays;
+};
+
+const buildCornerRays = (primary: BlackHole): Ray[] => {
+    const rays: Ray[] = [];
+    const start = Math.PI * 1.5;
+    const end = Math.PI * 2.0;
+    for (let i = 0; i < RAY_COUNT; i++) {
+        const t = RAY_COUNT === 1 ? 0.0 : i / (RAY_COUNT - 1);
+        const angle = start + (end - start) * t;
+        const dir = vec2(C * Math.cos(angle), C * Math.sin(angle));
+        rays.push(new Ray(pos2(LEFT_EDGE, TOP_EDGE), dir, primary));
+    }
+    return rays;
+};
+
+const buildCompactedRays = (primary: BlackHole): Ray[] => {
+    const rays: Ray[] = [];
+    const start = -COMPACT_ANGLE_SPREAD * 0.5;
+    const end = COMPACT_ANGLE_SPREAD * 0.5;
+    for (let i = 0; i < COMPACT_RAY_COUNT; i++) {
+        const t = COMPACT_RAY_COUNT === 1 ? 0.0 : i / (COMPACT_RAY_COUNT - 1);
+        const angle = start + (end - start) * t;
+        const dir = vec2(C * Math.cos(angle), C * Math.sin(angle));
+        rays.push(new Ray(pos2(COMPACT_ORIGIN.x, COMPACT_ORIGIN.y * 4.385), dir, primary));
+    }
+    return rays;
+};
+
+const resetSimulation = (): void => {
+    sim.setBlackHoles([b]);
+    sim.clearRays();
+    sim.addRays(buildSideRays(b));
+    sim.resetTiming();
+};
+
+const newPosBlackhole = (posOrList: Vector2 | Vector2[]): Vector2[] => {
+    const list = Array.isArray(posOrList) ? posOrList : [posOrList];
+    if (list.length === 0) {
+        resetSimulation();
+        return [];
+    }
+    const worldList = list.map((p) => screenToWorld(vec2(p.x, p.y)));
+    const holes = worldList.map((p) => new BlackHole(vec2(p.x, p.y)));
+    const primary = holes[0] ?? b;
+    sim.setBlackHoles(holes);
+    sim.clearRays();
+    sim.addRays(buildSideRays(primary));
+    sim.resetTiming();
+    console.log("Black holes (world meters):", worldList);
+    return worldList;
+};
+
+const initRayFromCorner = (): void => {
+    const primary = sim.getPrimaryBlackHole() ?? b;
+    sim.clearRays();
+    sim.addRays(buildCornerRays(primary));
+    sim.resetTiming();
+};
+
+const initRayFromSide = (): void => {
+    const primary = sim.getPrimaryBlackHole() ?? b;
+    sim.clearRays();
+    sim.addRays(buildSideRays(primary));
+    sim.resetTiming();
+};
+
+const initCompactedRay = (): void => {
+    const primary = sim.getPrimaryBlackHole() ?? b;
+    sim.clearRays();
+    sim.addRays(buildCompactedRays(primary));
+    sim.resetTiming();
+};
+
+const help = (): void => {
+    console.log("Commands:");
+    console.log("- reset(): restore center black hole and side rays");
+    console.log("- newPosBlackhole({x, y}) or newPosBlackhole([{x, y}, ...]) (screen pixels)");
+    console.log("- initRayFromSide(): side rays like default");
+    console.log("- initRayFromCorner(): corner rays (3/2π to 2π)");
+    console.log("- initCompactedRay(): tight bundle from a single origin");
+};
+
+(window as any).reset = resetSimulation;
+(window as any).newPosBlackhole = newPosBlackhole;
+(window as any).initRayFromCorner = initRayFromCorner;
+(window as any).initRayFromSide = initRayFromSide;
+(window as any).initCompactedRay = initCompactedRay;
+(window as any).help = help;
+
+const sim = new Simulation([b], 1, 60);
+sim.addRays(buildSideRays(b));
 sim.start();
