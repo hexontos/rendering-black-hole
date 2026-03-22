@@ -1,11 +1,13 @@
 # Dependencies
+node_modules
 node_modules/
 
 # Build outputs
+dist
 dist/
 *.js
 *.js.map
-!esbuild.config.mjs  # Keep your config file
+!esbuild.config.mjs  # Keep config file
 
 # Environment variables
 .env
@@ -33,6 +35,13 @@ Thumbs.db
 .Trashes
 ehthumbs.db
 Thumbs.db
+*/.DS_Store
+*/.DS_Store?
+*/._*
+*/.Spotlight-V100
+*/.Trashes
+
+
 
 # Logs
 npm-debug.log*
