@@ -51,9 +51,9 @@ class BlackHole {
     public r: number
     public color: string
 
-    constructor(pos: Vector2) {
+    constructor(pos: Vector2, mass: number = SAGITTARIUS_A_MASS) {
         this.pos = pos;
-        this.mass = SAGITTARIUS_A_MASS;
+        this.mass = mass;
         this.schwarzschildRadius = 2.0 * G * this.mass / (C**2);
         this.gravity = G * this.mass;
 
@@ -74,6 +74,68 @@ class BlackHole {
 }
 const b = new BlackHole(WORLD_CENTER);
 
+type FourStates = [number, number, number, number];
+
+class GeodesicIntegrator {
+    private k1: FourStates = [0, 0, 0, 0];
+    private k2: FourStates = [0, 0, 0, 0];
+    private k3: FourStates = [0, 0, 0, 0];
+    private k4: FourStates = [0, 0, 0, 0];
+    private temp: FourStates = [0, 0, 0, 0];
+    private y: FourStates = [0, 0, 0, 0];
+
+    private addState(a: FourStates, b: FourStates, factor: number, out: FourStates): void {
+        out[0] = a[0] + b[0] * factor;
+        out[1] = a[1] + b[1] * factor;
+        out[2] = a[2] + b[2] * factor;
+        out[3] = a[3] + b[3] * factor;
+    }
+
+    private geodesicRHS(state: { r: number; dr: number; dphi: number; E: number }, rhs: FourStates, rs: SchwarzschildRadius): void {
+        const r: number = state.r;
+        const dr: number = state.dr;
+        const dphi: number = state.dphi;
+        const E: number = state.E
+
+        const f: number = 1.0 - rs / r;
+
+        rhs[0] = dr; // dr/dλ = dr
+        rhs[1] = dphi; // dφ/dλ = dphi
+
+        // d²r/dλ² from Schwarzschild null geodesic:
+        const dt_dλ: number = E / f;
+        rhs[2] = -(rs / (2*r**2)) * f * (dt_dλ**2)
+            + (rs / (2*r**2*f)) * (dr**2)
+            + (r - rs) * (dphi**2);
+
+        // d²φ/dλ² = -2*(dr * dphi) / r
+        rhs[3] = -2.0 * dr * dphi / r;
+    }
+
+    step(ray: Ray, dλ: number, rs: SchwarzschildRadius): void {
+        this.y[0] = ray.r;
+        this.y[1] = ray.phi;
+        this.y[2] = ray.dr;
+        this.y[3] = ray.dphi;
+
+        this.geodesicRHS({ r: ray.r, dr: ray.dr, dphi: ray.dphi, E: ray.E }, this.k1, rs);
+        this.addState(this.y, this.k1, dλ/2.0, this.temp);
+
+        this.geodesicRHS({ r: this.temp[0], dr: this.temp[2], dphi: this.temp[3], E: ray.E }, this.k2, rs);
+        this.addState(this.y, this.k2, dλ/2.0, this.temp);
+
+        this.geodesicRHS({ r: this.temp[0], dr: this.temp[2], dphi: this.temp[3], E: ray.E }, this.k3, rs);
+        this.addState(this.y, this.k3, dλ, this.temp);
+
+        this.geodesicRHS({ r: this.temp[0], dr: this.temp[2], dphi: this.temp[3], E: ray.E }, this.k4, rs);
+
+        ray.r    += (dλ / 6.0) * (this.k1[0] + 2*this.k2[0] + 2*this.k3[0] + this.k4[0]);
+        ray.phi  += (dλ / 6.0) * (this.k1[1] + 2*this.k2[1] + 2*this.k3[1] + this.k4[1]);
+        ray.dr   += (dλ / 6.0) * (this.k1[2] + 2*this.k2[2] + 2*this.k3[2] + this.k4[2]);
+        ray.dphi += (dλ / 6.0) * (this.k1[3] + 2*this.k2[3] + 2*this.k3[3] + this.k4[3]);
+    }
+}
+
 class Ray {
     // cartesian
     pos: Vector2;
@@ -90,8 +152,9 @@ class Ray {
     // draw
     trail: Position2[] = []; // array of pos history
     size: number = 2;
+    active: boolean = true;
 
-    constructor(position: Vector2, direction: Vector2) {
+    constructor(position: Vector2, direction: Vector2, primaryBlackHole: BlackHole) {
         // cartesian
         this.pos = position;
         this.dir = direction;
@@ -103,87 +166,44 @@ class Ray {
         this.dphi = (-this.dir.x * Math.sin(this.phi) + this.dir.y * Math.cos(this.phi)) / this.r;
         // store conserved quantities
         this.L = this.r * this.r * this.dphi;
-        const f: number = 1.0 - b.schwarzschildRadius / this.r;
+        const f: number = 1.0 - primaryBlackHole.schwarzschildRadius / this.r;
         const dt_dλ: number = Math.sqrt((this.dr**2) / (f**2) + ((this.r**2) * (this.dphi**2)) / f);
         this.E = f * dt_dλ;
         // start trail
         this.trail.push(vec2(this.pos.x, this.pos.y));
     }
 
-    step(b: BlackHole, subSteps: number = 1) {
+    step(b: BlackHole, integrator: GeodesicIntegrator, subSteps: number = 1) {
         const dλ: number = 1.0 / subSteps;
         const rs: number = b.schwarzschildRadius;
 
-        if (this.r <= b.schwarzschildRadius) return; // Robin Stooop it if inside the event horizon
-
-        type fourStates = [number, number, number, number];
-
-        // integrate (r,φ,dr,dφ)
-        const RungeKutta4 = (a: fourStates, b: fourStates, factor: number, out: fourStates): void => {
-            out[0] = a[0] + b[0] * factor;
-            out[1] = a[1] + b[1] * factor;
-            out[2] = a[2] + b[2] * factor;
-            out[3] = a[3] + b[3] * factor;
-        }
-
-        type GeodesicState = { r: number; dr: number; dphi: number; E: number };
-
-        const geodesicRHS = (state: GeodesicState, rhs: fourStates, rs: SchwarzschildRadius): void => { // compute light bending
-            const r: number = state.r;
-            const dr: number = state.dr;
-            const dphi: number = state.dphi;
-            const E: number = state.E
-            
-            
-            const f: number = 1.0 - rs / r;
-
-            rhs[0] = dr; // dr/dλ = dr
-            rhs[1] = dphi; // dφ/dλ = dphi
-            
-            // d²r/dλ² from Schwarzschild null geodesic:
-            const dt_dλ: number = E / f;
-            rhs[2] = -(rs / (2*r**2)) * f * (dt_dλ**2)
-                + (rs / (2*r**2*f)) * (dr**2)
-                + (r - rs) * (dphi**2);
-
-            // d²φ/dλ² = -2*(dr * dphi) / r
-            rhs[3] = -2.0 * dr * dphi / r;
-        }
-
-        const rk4Step = (dλ: number, rs: SchwarzschildRadius): void => {
-            const y: fourStates = [this.r, this.phi, this.dr, this.dphi];
-            const k1: fourStates = [0, 0, 0, 0];
-            const temp: fourStates = [0, 0, 0, 0];
-
-            geodesicRHS({ r: this.r, dr: this.dr, dphi: this.dphi, E: this.E }, k1, rs);
-            RungeKutta4(y, k1, dλ/2.0, temp);
-            
-            const k2: fourStates = [0, 0, 0, 0];
-            geodesicRHS({ r: temp[0], dr: temp[2], dphi: temp[3], E: this.E }, k2, rs);
-            RungeKutta4(y, k2, dλ/2.0, temp);
-
-            const k3: fourStates = [0, 0, 0, 0];
-            geodesicRHS({ r: temp[0], dr: temp[2], dphi: temp[3], E: this.E }, k3, rs);
-            RungeKutta4(y, k3, dλ, temp);
-
-            const k4: fourStates = [0, 0, 0, 0];
-            geodesicRHS({ r: temp[0], dr: temp[2], dphi: temp[3], E: this.E }, k4, rs);
-
-            this.r += (dλ / 6.0) * (k1[0] + 2*k2[0] + 2*k3[0] + k4[0]);
-            this.phi  += (dλ / 6.0) * (k1[1] + 2*k2[1] + 2*k3[1] + k4[1]);
-            this.dr   += (dλ / 6.0) * (k1[2] + 2*k2[2] + 2*k3[2] + k4[2]);
-            this.dphi += (dλ / 6.0) * (k1[3] + 2*k2[3] + 2*k3[3] + k4[3]);
+        if (!this.active) return;
+        if (this.isInside(b)) {
+            this.active = false;
+            return;
         }
 
         for (let i = 0; i < subSteps; i++) {
-            rk4Step(dλ, rs);
+            integrator.step(this, dλ, rs);
 
             // convert back to cartesian
             this.pos = vec2(this.r * Math.cos(this.phi), this.r * Math.sin(this.phi));
 
             // record the trail
             this.trail.push(vec2(this.pos.x, this.pos.y));
+
+            if (this.isInside(b)) {
+                this.active = false;
+                break;
+            }
         }
+    }
+
+    isInside(blackHole: BlackHole): boolean {
+        const dx = this.pos.x - blackHole.pos.x;
+        const dy = this.pos.y - blackHole.pos.y;
+        const dist = Math.hypot(dx, dy);
+        return dist <= blackHole.schwarzschildRadius;
     }
 
 
@@ -207,53 +227,80 @@ class Ray {
         }
     }
 }
-// init Rays
-const projectedLight: Ray[] = [];
+class Simulation {
+    private rays: Ray[] = [];
+    private integrator: GeodesicIntegrator = new GeodesicIntegrator();
+    private blackHoles: BlackHole[];
+    private raySubSteps: number;
+    private fps: number;
+    private interval: number;
+    private lastTime: number = 0;
+    private frameCount: number = 0;
+
+    constructor(blackHoles: BlackHole[], raySubSteps: number, fps: number) {
+        this.blackHoles = blackHoles;
+        this.raySubSteps = raySubSteps;
+        this.fps = fps;
+        this.interval = 1000 / fps;
+    }
+
+    addRay(ray: Ray): void {
+        this.rays.push(ray);
+    }
+
+    private updateRays(): void {
+        const subStepsPer = Math.max(1, Math.floor(this.raySubSteps / this.blackHoles.length));
+        for (const ray of this.rays) {
+            if (!ray.active) continue;
+            for (const hole of this.blackHoles) {
+                if (!ray.active) break;
+                ray.step(hole, this.integrator, subStepsPer);
+            }
+        }
+    }
+
+    private drawScene(ctx: CanvasRenderingContext2D): void {
+        ctx.clearRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+        for (const hole of this.blackHoles) {
+            hole.draw(ctx);
+        }
+        for (const ray of this.rays) {
+            ray.draw(ctx);
+        }
+
+        if (DEBUG) {
+            this.frameCount += 1;
+            ctx.fillStyle = "#00ff88";
+            ctx.fillText(`frame ${this.frameCount}`, 10, 20);
+            ctx.fillText(`canvas ${SCREEN_WIDTH}x${SCREEN_HEIGHT}`, 10, 36);
+            const c = worldToScreen(WORLD_CENTER);
+            ctx.fillRect(c.x - 2, c.y - 2, 4, 4);
+        }
+    }
+
+    start(): void {
+        const tick = (timestamp: number) => {
+            if (!this.lastTime) this.lastTime = timestamp;
+            const deltaTime = timestamp - this.lastTime;
+            if (deltaTime < this.interval) {
+                requestAnimationFrame(tick);
+                return;
+            }
+
+            this.lastTime = timestamp - (deltaTime % this.interval);
+            this.updateRays();
+            this.drawScene(ctx);
+            requestAnimationFrame(tick);
+        };
+
+        requestAnimationFrame(tick);
+    }
+}
+
+const sim = new Simulation([b], 8, 60);
 const ArrayDistance = SIM_HEIGHT / 8.0;
-for (var i: number = -4; i <= 4; i++) {
-    projectedLight.push(new Ray(pos2(-SIM_WIDTH, i * ArrayDistance), vec2(C, 0)))
+for (var i: number = -6; i <= 6; i++) {
+    sim.addRay(new Ray(pos2(-SIM_WIDTH, i * ArrayDistance), vec2(C, 0), b));
 }
 
-
-let lastTime: number = 0;
-let frameCount: number = 0;
-const RAY_SUBSTEPS = 8;
-const fps: number = 60;
-const interval: number = 1000 / fps;
-
-function animate(timestamp: number) {
-    if (!lastTime) lastTime = timestamp;
-    const deltaTime = timestamp - lastTime;
-    if (deltaTime < interval) {
-        requestAnimationFrame(animate);
-        return;
-    }
-
-    lastTime = timestamp - (deltaTime % interval);
-
-    // Clear the canvas
-    ctx.clearRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-
-    b.draw(ctx);
-    
-    // light projectiles
-    for (const l of projectedLight) {
-        l.step(b, RAY_SUBSTEPS);
-        l.draw(ctx);
-    }
-
-    if (DEBUG) {
-        frameCount += 1;
-        ctx.fillStyle = "#00ff88";
-        ctx.fillText(`frame ${frameCount}`, 10, 20);
-        ctx.fillText(`canvas ${SCREEN_WIDTH}x${SCREEN_HEIGHT}`, 10, 36);
-        const c = worldToScreen(WORLD_CENTER);
-        ctx.fillRect(c.x - 2, c.y - 2, 4, 4);
-    }
-
-    requestAnimationFrame(animate);
-}
-
-
-// Start the animation
-requestAnimationFrame(animate);
+sim.start();
