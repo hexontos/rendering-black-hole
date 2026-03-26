@@ -45,3 +45,86 @@ for (let y: number = 0; y < SCREEN_HEIGHT; y++) {
 }
 
 ctx.putImageData(image, 0, 0);
+
+type POINT = [number, number, number];
+type OBJECT = {
+    shape: string,
+    position: POINT,
+    radius: number,
+    emission: RGB,
+    reflectivity: RGB,
+    roughness: number,
+}
+type Vector3 = [number, number, number];
+
+const objects: OBJECT[] = [
+    {
+        shape: "sphere",
+        position: [0,-14.5,7],
+        radius: 5,
+        emission: [5550,5550,5550],
+        reflectivity: [1,1,1],
+        roughness: 3,
+    },
+    {
+        shape: "sphere",
+        position: [3,7,7],
+        radius: 3,
+        emission: [0,0,0],
+        reflectivity: [1,1,1],
+        roughness: 0,
+    },
+]
+
+type INTERSECTION = {
+    collided: boolean,
+    point: POINT,
+    dist: number,
+    normal: POINT,
+    object: OBJECT,
+}
+
+const intersection = (origin: POINT, direction: Vector3, objects: OBJECT[]): INTERSECTION => {
+    // later upgrade to BVH
+}
+
+const trace = (origin, direction, objects, steps): RGB => {
+    let interection: INTERSECTION = intersection(origin, direction, objects);
+}
+
+const normalize = (vector: Vector3): Vector3 => {
+    const [x, y, z]: Vector3 = vector
+    // mag op
+    let mag = Math.sqrt((x**2 + y**2 + z**2));
+    // mul op
+    mag = 1/mag;
+    return [x * mag, y * mag, z * mag];
+}
+
+const focalLength: number = 50;
+const samples: number = 10;
+// main loop
+// we assume fixed camera (and dont need angle)
+//  - position: [0,0,0]
+//  - forward: [0,0,1]
+//  - right: [1,0,0]
+//  - up: [0,1,0]
+// otherwise we would do something like this direction = normalize(x * right + y * up + focalLength * forward)
+for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
+    for (let i: number = 0; i < SCREEN_WIDTH; i++) {
+        let x: number = i - SCREEN_WIDTH * 0.5;
+        let y: number = j - SCREEN_HEIGHT * 0.5;
+
+        // make ray point of creation and screen plane 
+        let rayDirection = normalize([x, y, focalLength]) // normalize to 0-1
+
+        let pixel: RGB = [0, 0, 0];
+        for (let i: number = 0; i < samples; i++) {
+            // add op (a: Vector + b: Vector -> c: Vector)
+            const [x, y, z] = trace([0, 0, 0], rayDirection, objects, 4);
+            pixel[0] += x;
+            pixel[1] += y;
+            pixel[2] += z;
+        }
+    }
+}
