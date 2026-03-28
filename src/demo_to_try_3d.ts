@@ -28,8 +28,11 @@ const lerpColor = (start: RGB, end: RGB, t: number): RGB => [
     Math.round(lerp(start[2], end[2], t)),
 ];
 
-const toByte = (value: number): number => Math.max(0, Math.min(255, Math.round(value)));
+const toneMap = (value: number): number => 255 * (1 - Math.exp(-value * 0.02));
+const toByte = (value: number): number => Math.max(0, Math.min(255, Math.round(toneMap(value))));
 
+
+/*
 for (let y: number = 0; y < SCREEN_HEIGHT; y++) {
     const v: number = y / Math.max(SCREEN_HEIGHT - 1, 1);
     for (let x: number = 0; x < SCREEN_WIDTH; x++) {
@@ -45,8 +48,8 @@ for (let y: number = 0; y < SCREEN_HEIGHT; y++) {
         pixels[i + 3] = 255;
     }
 };
-
 ctx.putImageData(image, 0, 0);
+*/
 
 type POINT = [number, number, number];
 type OBJECT = {
@@ -63,7 +66,7 @@ const objects: SPHERE[] = [
     {
         position: [0,-14.5,7],
         radius: 5,
-        emission: [5550,5550,5550],
+        emission: [255, 210, 140],
         reflectivity: [1,1,1],
         roughness: 3,
     },
@@ -71,9 +74,16 @@ const objects: SPHERE[] = [
         position: [3,7,7],
         radius: 3,
         emission: [0,0,0],
-        reflectivity: [1,1,1],
+        reflectivity: [1,0.35,0.3],
         roughness: 0,
     },
+    {
+        position: [30,7,7],
+        radius: 10,
+        emission: [0,0,0],
+        reflectivity: [0.25,0.75,1],
+        roughness: 0,
+    }
 ];
 
 type INFINITY = number & { readonly __infinity: unique symbol };
@@ -131,6 +141,14 @@ const sub = <T extends Tuple3<number>>(a: T, b: T): T => {
 
 const reflect = (direction: Vector3, normal: Vector3): Vector3 => {
     return sub(direction, mul(normal, dot(direction, normal) * 2));
+};
+
+const background = (direction: Vector3): RGB => {
+    const u = direction[0] * 0.5 + 0.5;
+    const v = direction[1] * 0.5 + 0.5;
+    const top = lerpColor(TOP_LEFT, TOP_RIGHT, u);
+    const bottom = lerpColor(BOTTOM_LEFT, BOTTOM_RIGHT, u);
+    return lerpColor(bottom, top, v);
 };
 
 const intersection = (origin: POINT, direction: Vector3, spheres: SPHERE[]): INTERSECTION => {
@@ -208,7 +226,7 @@ const trace = (origin: POINT, direction: Vector3, spheres: SPHERE[], steps: numb
         return add(hit.object.emission, mulParts(trace(reflectedOrigin, reflectedDirection, spheres.filter(
             (o) => o != hit.object), steps - 1), hit.object.reflectivity))
     }
-    return [0, 0, 0];
+    return background(direction);
 }
 
 const focalLength: number = 50;
