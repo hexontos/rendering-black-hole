@@ -28,6 +28,8 @@ const lerpColor = (start: RGB, end: RGB, t: number): RGB => [
     Math.round(lerp(start[2], end[2], t)),
 ];
 
+const toByte = (value: number): number => Math.max(0, Math.min(255, Math.round(value)));
+
 for (let y: number = 0; y < SCREEN_HEIGHT; y++) {
     const v: number = y / Math.max(SCREEN_HEIGHT - 1, 1);
     for (let x: number = 0; x < SCREEN_WIDTH; x++) {
@@ -228,11 +230,16 @@ for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
 
         let pixel: RGB = [0, 0, 0];
         for (let i: number = 0; i < samples; i++) {
-            // add op (a: Vector + b: Vector -> c: Vector)
-            const [x, y, z] = trace([0, 0, 0], rayDirection, objects, 4);
-            pixel[0] += x;
-            pixel[1] += y;
-            pixel[2] += z;
-        }
+            pixel = add(pixel, trace([0, 0, 0], rayDirection, objects, 4));
+        };
+        pixel = mul(pixel, 1/samples);
+        const index = pixelIndex(i, j);
+        pixels[index + 0] = toByte(pixel[0]);
+        pixels[index + 1] = toByte(pixel[1]);
+        pixels[index + 2] = toByte(pixel[2]);
+        pixels[index + 3] = 255;
+
     }
 }
+
+ctx.putImageData(image, 0, 0);
