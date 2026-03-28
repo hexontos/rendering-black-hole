@@ -42,7 +42,7 @@ for (let y: number = 0; y < SCREEN_HEIGHT; y++) {
         pixels[i + 2] = b;
         pixels[i + 3] = 255;
     }
-}
+};
 
 ctx.putImageData(image, 0, 0);
 
@@ -53,7 +53,7 @@ type OBJECT = {
     emission: RGB,
     reflectivity: RGB,
     roughness: number,
-}
+};
 type SPHERE = OBJECT;
 type Vector3 = [number, number, number];
 
@@ -72,7 +72,7 @@ const objects: SPHERE[] = [
         reflectivity: [1,1,1],
         roughness: 0,
     },
-]
+];
 
 type INFINITY = number & { readonly __infinity: unique symbol };
 type INTERSECTION = 
@@ -81,7 +81,7 @@ type INTERSECTION =
         point: POINT;
         dist: number;
         normal: Vector3;
-        object?: OBJECT;
+        object: OBJECT;
     }
     | {
         collided: false;
@@ -98,30 +98,38 @@ const normalize = (vector: Vector3): Vector3 => {
     // mul op
     mag = 1/mag;
     return [x * mag, y * mag, z * mag];
-}
+};
 
 type Tuple3<T> = [T, T, T];
-type NumericTuple<T extends number> = readonly [T, ...T[]];
 
+const mulParts = <T extends Tuple3<number>>(a: T, b: T): T => {
+    return a.map((v, i) => v * (b[i] as number)) as T;
+};
+
+type NumericTuple<T extends number> = readonly [T, ...T[]];
 const dot = <T extends number, U extends NumericTuple<T>>(a: U, b: U): number => {
     return a.map((v, i) => v * (b[i] as number)).reduce((acc, curr) => acc + curr, 0);
 };
 
 const mag = <T extends [number, number, number]>(a: T): number => {
     return Math.sqrt((a.map((v, _) => v**2) as T).reduce((acc, curr) => acc + curr, 0));
-}
+};
 
 const mul = <T extends Tuple3<number>>(a: T, b: number): T => {
     return a.map((v, _) => v*b) as T;
-}
+};
 
 const add = <T extends Tuple3<number>>(a: T, b: T): T => {
     return a.map((v, i) => v + (b[i] as number)) as T;
-}
+};
 
 const sub = <T extends Tuple3<number>>(a: T, b: T): T => {
     return add(a, mul(b, -1)) as T;
-}
+};
+
+const reflect = (direction: Vector3, normal: Vector3): Vector3 => {
+    return sub(direction, mul(normal, dot(direction, normal) * 2));
+};
 
 const intersection = (origin: POINT, direction: Vector3, spheres: SPHERE[]): INTERSECTION => {
     // later upgrade to BVH
@@ -152,6 +160,7 @@ const intersection = (origin: POINT, direction: Vector3, spheres: SPHERE[]): INT
                 dist: distToIntersection,
                 point: point,
                 normal: normal,
+                object: sphere,
             }
         } else {
             intersection = {
@@ -189,7 +198,14 @@ const intersection = (origin: POINT, direction: Vector3, spheres: SPHERE[]): INT
 }
 
 const trace = (origin: POINT, direction: Vector3, spheres: SPHERE[], steps: number): RGB => {
-    let interection: INTERSECTION = intersection(origin, direction, spheres);
+    const hit: INTERSECTION = intersection(origin, direction, spheres);
+
+    if (hit.collided && steps > 0) {
+        const reflectedOrigin = hit.point;
+        const reflectedDirection = reflect(direction, hit.normal);
+        return add(hit.object.emission, mulParts(trace(reflectedOrigin, reflectedDirection, spheres.filter(
+            (o) => o != hit.object), steps - 1), hit.object.reflectivity))
+    }
     return [0, 0, 0];
 }
 
