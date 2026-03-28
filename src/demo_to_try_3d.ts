@@ -87,6 +87,9 @@ type INTERSECTION =
         collided: false;
         dist: INFINITY;
     };
+type HIT_INTERSECTION = Extract<INTERSECTION, { collided: true }>;
+
+const INFINITY_DISTANCE = Infinity as INFINITY;
 
 const normalize = (vector: Vector3): Vector3 => {
     const [x, y, z]: Vector3 = vector
@@ -123,9 +126,9 @@ const sub = <T extends Tuple3<number>>(a: T, b: T): T => {
 const intersection = (origin: POINT, direction: Vector3, spheres: SPHERE[]): INTERSECTION => {
     // later upgrade to BVH
     let minDist: number = Infinity;
-    let closestIntersection: number;
+    let closestIntersection: HIT_INTERSECTION | undefined;
     let collided: boolean = false;
-    let closestSphere: number;
+    let closestSphere: SPHERE | undefined;
 
     for (const sphere of spheres) {
         let intersection: INTERSECTION;
@@ -153,11 +156,11 @@ const intersection = (origin: POINT, direction: Vector3, spheres: SPHERE[]): INT
         } else {
             intersection = {
                 collided: false,
-                dist: Infinity,
+                dist: INFINITY_DISTANCE,
             }
         }
 
-        if (intersection.dist < minDist) {
+        if (intersection.collided && intersection.dist < minDist) {
             closestIntersection = intersection;
             closestSphere = sphere;
 
@@ -169,18 +172,25 @@ const intersection = (origin: POINT, direction: Vector3, spheres: SPHERE[]): INT
         
     }
 
-    return {
-        collided: collided,
-        point: closestIntersection?.point ?? [0,0,0],
-        dist: closestIntersection?.dist ?? Infinity,
-        normal: closestIntersection?.normal ?? [0, 0, 0],
-        object: closestSphere
+    if (collided && closestIntersection != null && closestSphere != null) {
+        return {
+            collided: true,
+            point: closestIntersection.point,
+            dist: closestIntersection.dist,
+            normal: closestIntersection.normal,
+            object: closestSphere,
+        }
     }
 
+    return {
+        collided: false,
+        dist: INFINITY_DISTANCE,
+    }
 }
 
 const trace = (origin: POINT, direction: Vector3, spheres: SPHERE[], steps: number): RGB => {
     let interection: INTERSECTION = intersection(origin, direction, spheres);
+    return [0, 0, 0];
 }
 
 const focalLength: number = 50;
