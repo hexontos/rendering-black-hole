@@ -48,18 +48,17 @@ ctx.putImageData(image, 0, 0);
 
 type POINT = [number, number, number];
 type OBJECT = {
-    shape: string,
     position: POINT,
     radius: number,
     emission: RGB,
     reflectivity: RGB,
     roughness: number,
 }
+type SPHERE = OBJECT;
 type Vector3 = [number, number, number];
 
-const objects: OBJECT[] = [
+const objects: SPHERE[] = [
     {
-        shape: "sphere",
         position: [0,-14.5,7],
         radius: 5,
         emission: [5550,5550,5550],
@@ -67,7 +66,6 @@ const objects: OBJECT[] = [
         roughness: 3,
     },
     {
-        shape: "sphere",
         position: [3,7,7],
         radius: 3,
         emission: [0,0,0],
@@ -76,21 +74,19 @@ const objects: OBJECT[] = [
     },
 ]
 
-type INTERSECTION = {
-    collided: boolean,
-    point: POINT,
-    dist: number,
-    normal: POINT,
-    object: OBJECT,
-}
-
-const intersection = (origin: POINT, direction: Vector3, objects: OBJECT[]): INTERSECTION => {
-    // later upgrade to BVH
-}
-
-const trace = (origin, direction, objects, steps): RGB => {
-    let interection: INTERSECTION = intersection(origin, direction, objects);
-}
+type INFINITY = number & { readonly __infinity: unique symbol };
+type INTERSECTION = 
+    | {
+        collided: true;
+        point: POINT;
+        dist: number;
+        normal: Vector3;
+        object?: OBJECT;
+    }
+    | {
+        collided: false;
+        dist: INFINITY;
+    };
 
 const normalize = (vector: Vector3): Vector3 => {
     const [x, y, z]: Vector3 = vector
@@ -99,6 +95,92 @@ const normalize = (vector: Vector3): Vector3 => {
     // mul op
     mag = 1/mag;
     return [x * mag, y * mag, z * mag];
+}
+
+type Tuple3<T> = [T, T, T];
+type NumericTuple<T extends number> = readonly [T, ...T[]];
+
+const dot = <T extends number, U extends NumericTuple<T>>(a: U, b: U): number => {
+    return a.map((v, i) => v * (b[i] as number)).reduce((acc, curr) => acc + curr, 0);
+};
+
+const mag = <T extends [number, number, number]>(a: T): number => {
+    return Math.sqrt((a.map((v, _) => v**2) as T).reduce((acc, curr) => acc + curr, 0));
+}
+
+const mul = <T extends Tuple3<number>>(a: T, b: number): T => {
+    return a.map((v, _) => v*b) as T;
+}
+
+const add = <T extends Tuple3<number>>(a: T, b: T): T => {
+    return a.map((v, i) => v + (b[i] as number)) as T;
+}
+
+const sub = <T extends Tuple3<number>>(a: T, b: T): T => {
+    return add(a, mul(b, -1)) as T;
+}
+
+const intersection = (origin: POINT, direction: Vector3, spheres: SPHERE[]): INTERSECTION => {
+    // later upgrade to BVH
+    let minDist: number = Infinity;
+    let closestIntersection: number;
+    let collided: boolean = false;
+    let closestSphere: number;
+
+    for (const sphere of spheres) {
+        let intersection: INTERSECTION;
+
+        // we only compute spheres
+        const sphereRay: Vector3 = sub(sphere.position, origin);
+        const distSphereRay: number = mag(sphereRay);
+        const distToClosestPointOnRay: number = dot(sphereRay, direction);
+        const distFromClosestPointToSphere: number = Math.sqrt(distSphereRay ** 2 - distToClosestPointOnRay ** 2);
+
+        const distToIntersection: number = distToClosestPointOnRay - Math.sqrt(Math.abs(sphere.radius ** 2 - distFromClosestPointToSphere ** 2))
+        const point: POINT = add(origin, mul(direction, distToIntersection));
+        let normal: Vector3 = normalize(sub(point, sphere.position));
+
+        // calc rougness
+        normal = normalize(add(normal, mul([Math.random()-0.5, Math.random()-0.5, Math.random()-0.5], sphere.roughness)))
+
+        if (distToClosestPointOnRay > 0 && distFromClosestPointToSphere < sphere.radius) {
+            intersection = {
+                collided: true,
+                dist: distToIntersection,
+                point: point,
+                normal: normal,
+            }
+        } else {
+            intersection = {
+                collided: false,
+                dist: Infinity,
+            }
+        }
+
+        if (intersection.dist < minDist) {
+            closestIntersection = intersection;
+            closestSphere = sphere;
+
+            minDist = intersection.dist
+        }
+
+        // once true, always true
+        collided = collided || intersection.collided
+        
+    }
+
+    return {
+        collided: collided,
+        point: closestIntersection?.point ?? [0,0,0],
+        dist: closestIntersection?.dist ?? Infinity,
+        normal: closestIntersection?.normal ?? [0, 0, 0],
+        object: closestSphere
+    }
+
+}
+
+const trace = (origin: POINT, direction: Vector3, spheres: SPHERE[], steps: number): RGB => {
+    let interection: INTERSECTION = intersection(origin, direction, spheres);
 }
 
 const focalLength: number = 50;
