@@ -7,7 +7,7 @@ const isWatch = process.argv.includes('--watch');
 if (isWatch) {
     // Watch mode - use context()
     const ctx = await esbuild.context({
-        entryPoints: ['./src/demo_to_try_3d.ts'],
+        entryPoints: ['./src/demo/rayRender3d.ts'],
         bundle: true,
         outfile: './dist/bundle.js',
         platform: 'browser',
@@ -21,7 +21,7 @@ if (isWatch) {
 } else {
     // Build mode
     await esbuild.build({
-        entryPoints: ['./src/demo_to_try_3d.ts'],
+        entryPoints: ['./src/demo/rayRender3d.ts'],
         bundle: true,
         outfile: './dist/bundle.js',
         platform: 'browser',

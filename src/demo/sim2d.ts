@@ -1,3 +1,5 @@
+// DEMO SCRIPT TO LEARN IMPLEMENTING GEODESIC SIMULATION (FOR 2D ENV WITHOUT RAYTRACING RENDER)
+
 const canvas = document.getElementById("blackhole-canvas") as HTMLCanvasElement;
 const context = canvas.getContext("2d") as CanvasRenderingContext2D | null;
 if (context === null) {
