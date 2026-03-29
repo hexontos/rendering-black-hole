@@ -62,7 +62,7 @@ type OBJECT = {
 type SPHERE = OBJECT;
 type Vector3 = [number, number, number];
 
-const objects: SPHERE[] = [
+let objects: SPHERE[] = [
     {
         position: [0,-14.5,7],
         radius: 5,
@@ -229,8 +229,8 @@ const trace = (origin: POINT, direction: Vector3, spheres: SPHERE[], steps: numb
     return background(direction);
 }
 
-const focalLength: number = 50;
-const samples: number = 10;
+let focalLength: number = 50;
+let samples: number = 10;
 // main loop
 // we assume fixed camera (and dont need angle)
 //  - position: [0,0,0]
@@ -238,26 +238,71 @@ const samples: number = 10;
 //  - right: [1,0,0]
 //  - up: [0,1,0]
 // otherwise we would do something like this direction = normalize(x * right + y * up + focalLength * forward)
-for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
-    for (let i: number = 0; i < SCREEN_WIDTH; i++) {
-        let x: number = i - SCREEN_WIDTH * 0.5;
-        let y: number = j - SCREEN_HEIGHT * 0.5;
+const runRender = () => {
+    for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
+        for (let i: number = 0; i < SCREEN_WIDTH; i++) {
+            let x: number = i - SCREEN_WIDTH * 0.5;
+            let y: number = j - SCREEN_HEIGHT * 0.5;
 
-        // make ray point of creation and screen plane 
-        let rayDirection = normalize([x, y, focalLength]) // normalize to 0-1
+            // make ray point of creation and screen plane 
+            let rayDirection = normalize([x, y, focalLength]) // normalize to 0-1
 
-        let pixel: RGB = [0, 0, 0];
-        for (let i: number = 0; i < samples; i++) {
-            pixel = add(pixel, trace([0, 0, 0], rayDirection, objects, 4));
-        };
-        pixel = mul(pixel, 1/samples);
-        const index = pixelIndex(i, j);
-        pixels[index + 0] = toByte(pixel[0]);
-        pixels[index + 1] = toByte(pixel[1]);
-        pixels[index + 2] = toByte(pixel[2]);
-        pixels[index + 3] = 255;
+            let pixel: RGB = [0, 0, 0];
+            for (let i: number = 0; i < samples; i++) {
+                pixel = add(pixel, trace([0, 0, 0], rayDirection, objects, 4));
+            };
+            pixel = mul(pixel, 1/samples);
+            const index = pixelIndex(i, j);
+            pixels[index + 0] = toByte(pixel[0]);
+            pixels[index + 1] = toByte(pixel[1]);
+            pixels[index + 2] = toByte(pixel[2]);
+            pixels[index + 3] = 255;
 
+            //ctx.fillStyle = `rgb(${pixel[0]},${pixel[1]},${pixel[2]})` // comment out putImageData to take this in effect
+            //ctx.fillRect(i,j,1,1);
+
+        }
     }
+    ctx.putImageData(image, 0, 0);
 }
 
-ctx.putImageData(image, 0, 0);
+const runRaytracingRender = (userChoice: SPHERE[] | SPHERE) => {
+    if (Array.isArray(userChoice)) {
+        objects = userChoice;
+    } else {
+        objects.push(userChoice);
+    }
+    runRender();
+}
+
+const changeFocalLength = (x: number) => {
+    focalLength = x;
+    runRender();
+}
+
+const changeSamples = (x: number) => {
+    samples = x;
+    runRender();
+}
+
+const help = (): void => {
+    console.log("Raytracing demo commands:");
+    console.log("- help(): show this list");
+    console.log("- runRaytracingRender(sphere): add one sphere and re-render");
+    console.log("- runRaytracingRender([sphere, ...]): replace the whole scene and re-render");
+    console.log("- changeFocalLength(number): update camera image-plane distance and re-render");
+    console.log("- changeSamples(number): update samples per pixel and re-render");
+    console.log("Sphere shape:");
+    console.log("{ position: [x, y, z], radius, emission: [r, g, b], reflectivity: [r, g, b], roughness }");
+    console.log("Examples:");
+    console.log("changeFocalLength(120)");
+    console.log("changeSamples(20)");
+    console.log("runRaytracingRender({ position: [0, 0, 12], radius: 2, emission: [0, 180, 255], reflectivity: [1, 1, 1], roughness: 0 })");
+};
+
+(window as any).runRaytracingRender = runRaytracingRender;
+(window as any).changeFocalLength = changeFocalLength;
+(window as any).changeSamples = changeSamples;
+(window as any).help = help;
+
+runRender()
