@@ -2,33 +2,44 @@
 // TYPES //
 ///////////
 
-type Byte = number & { readonly __brand: unique symbol };
+//import { assert } from "node:console";
 
-type Vector3 = {
+//type Byte = number & { readonly __brand: unique symbol };
+
+type RGB = {
+    r: number;
+    g: number;
+    b: number;
+};
+
+type Vector3 = { // go back to list, its mind dumbingly easier to manipulate with it <--------- NOTE
     x: number;
     y: number;
     z: number;
 };
 
-type RGB = {
-    r: Byte;
-    g: Byte;
-    b: Byte;
-};
-
 type SchwarzschildRadius = number;
 
-type BlackHole = {
+// stars or other scene objects circling the black hole.
+type Sphere = {
     pos: Vector3;
+    radius: number;
+    emission: RGB;
+    reflectivity: RGB;
+    roughness: number;
+};
+
+type BlackHole = Sphere & {
     mass: number;
     schwarzschildRadius: SchwarzschildRadius;
     gravity: number;
 };
 
-// stars or other scene objects circling the black hole.
-type Sphere = {
-    pos: Vector3;
-};
+type RenderOBJ = Sphere | BlackHole
+type renderObjects = {
+    b: BlackHole;
+    spheres: Sphere[];
+}
 
 type Ray = {
     // cartesian state.
@@ -72,15 +83,14 @@ type WorldConfig = {
 // CREATE OBJECTS //
 ////////////////////
 
+const rgb = (r: number, g: number, b: number) => ({r, g, b} satisfies RGB);
+
 const vec3 = (x: number, y: number, z: number) => ({ x, y, z } satisfies Vector3);
 
 const ray = (pos: Vector3, dir: Vector3): Ray => {
     const r = Math.hypot(pos.x, pos.y);
     const phi = Math.atan2(pos.y, pos.x);
-
-    if (r === 0) throw new Error("Cannot initialize a ray at the origin.");
-
-    // Convert the Cartesian direction into polar radial/angular components.
+    if (r === 0) throw new Error("Cannot initialize a ray at the origin....");
     const dr = dir.x * Math.cos(phi) + dir.y * Math.sin(phi);
     const dphi = (-dir.x * Math.sin(phi) + dir.y * Math.cos(phi)) / r;
 
@@ -94,16 +104,14 @@ const ray = (pos: Vector3, dir: Vector3): Ray => {
     };
 };
 
-const gRay = (sourceRay: Ray, blackHole: BlackHole): GeodesicRay => {
-    const L = sourceRay.r ** 2 * sourceRay.dphi;
-    const f = 1.0 - blackHole.schwarzschildRadius / sourceRay.r;
-    const dtDlambda = Math.sqrt(
-        (sourceRay.dr ** 2) / (f ** 2) + ((sourceRay.r ** 2) * (sourceRay.dphi ** 2)) / f,
-    );
-    const E = f * dtDlambda;
+const gRay = (ray: Ray, blackHole: BlackHole): GeodesicRay => {
+    const L = ray.r ** 2 * ray.dphi;
+    const f = 1.0 - blackHole.schwarzschildRadius / ray.r;
+    const dt_dλ = Math.sqrt((ray.dr ** 2) / (f ** 2) + ((ray.r ** 2) * (ray.dphi ** 2)) / f);
+    const E = f * dt_dλ;
 
     return {
-        ...sourceRay,
+        ...ray,
         E,
         L,
     };
@@ -115,12 +123,12 @@ const gRay = (sourceRay: Ray, blackHole: BlackHole): GeodesicRay => {
 
 const canvasElement = document.getElementById("blackhole-canvas");
 
-if (!(canvasElement instanceof HTMLCanvasElement)) throw new Error("Canvas element #blackhole-canvas was not found.");
+if (!(canvasElement instanceof HTMLCanvasElement)) throw new Error("Canvas element #blackhole-canvas was not found....");
 
 const canvas = canvasElement;
 const context = canvas.getContext("2d");
 
-if (context == null) throw new Error("2D canvas context could not be created.");
+if (context == null) throw new Error("2D canvas context could not be created....");
 
 const ctx = context as CanvasRenderingContext2D;
 
@@ -149,21 +157,49 @@ const blackHole = {
     mass: SAGITTARIUS_A_MASS,
     schwarzschildRadius: 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2),
     gravity: G * SAGITTARIUS_A_MASS,
+    radius: 1,
+    emission: rgb(0, 0, 0),
+    reflectivity: rgb(0, 0, 0),
+    roughness: 0,
 } satisfies BlackHole;
 
+const cameraOffset = 
+const camera = {
+    pos: blackHole.pos * 2,
+    fixedView: blackHole.pos,
+    angle: 0,
+    distance: 0.5,
+} satisfies Camera;
+
+const worldObjects: renderObjects = {b: blackHole, spheres: []};
 
 const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
-const pixels = image.data;
+
+// each pixel in canvas
+for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
+    for (let i: number = 0; i < SCREEN_WIDTH; i++) {
+        const x: number = i - SCREEN_WIDTH * 0.5;
+        const y: number = j - SCREEN_HEIGHT * 0.5;
 
 
-const pixelIndex = (x: number, y: number): number => (y * SCREEN_WIDTH + x) * 4;
+    }
+}
 
-function renderGradient(): void {
+const cpuPixelIndex = (x: number, y: number): number => (y * SCREEN_WIDTH + x) * 4;
+
+const cpuRenderRadientBG = (ctx: CanvasRenderingContext2D, image: ImageData, wc: WorldConfig): void => {
+    const SCREEN_WIDTH = wc.screenWidth;
+    const SCREEN_HEIGHT = wc.screenHeight;
+
+    const pixels: ImageDataArray = image.data;
+
+    const cpuPixelIndex = (x: number, y: number): number => (y * SCREEN_WIDTH + x) * 4;
+
     for (let y = 0; y < SCREEN_HEIGHT; y++) {
         const v = y / Math.max(SCREEN_HEIGHT - 1, 1);
         for (let x = 0; x < SCREEN_WIDTH; x++) {
             const u = x / Math.max(SCREEN_WIDTH - 1, 1);
-            const i = pixelIndex(x, y);
+            const i = cpuPixelIndex(x, y);
 
             pixels[i + 0] = Math.round(255 * u);
             pixels[i + 1] = Math.round(255 * v);
@@ -175,4 +211,31 @@ function renderGradient(): void {
     ctx.putImageData(image, 0, 0);
 }
 
-renderGradient();
+const cpuRenderRayTracing = (ctx: CanvasRenderingContext2D, image: ImageData, worldObjects: renderObjects, wc: WorldConfig) => {
+    const SCREEN_WIDTH = wc.screenWidth;
+    const SCREEN_HEIGHT = wc.screenHeight;
+    const pixels: ImageDataArray = image.data;
+    const samples = 4;
+
+    for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
+        for (let i: number = 0; i < SCREEN_WIDTH; i++) {
+            let x: number = i - SCREEN_WIDTH * 0.5;
+            let y: number = j - SCREEN_HEIGHT * 0.5;
+
+            let pixel: RGB = rgb(0, 0, 0)
+
+            // blackhole
+
+
+            // spheres
+            for (let i: number = 0; i < samples; i++) {
+                //pixel = add(pixel, trace([0, 0, 0], rayDirection, worldObjects, 4));
+            };
+        }
+    }
+}
+
+function cpuPipeline(worldObjects: renderObjects) {
+    cpuRenderRadientBG(ctx, image, SCREEN_WIDTH, SCREEN_HEIGHT);
+    cpuRenderRayTracing()
+}
