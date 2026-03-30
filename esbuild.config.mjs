@@ -12,6 +12,9 @@ if (isWatch) {
         outfile: './dist/bundle.js',
         platform: 'browser',
         target: 'es2020',
+        loader: {
+            '.wgsl': 'text',
+        },
         sourcemap: true,
         minify: false,
     });
@@ -26,6 +29,9 @@ if (isWatch) {
         outfile: './dist/bundle.js',
         platform: 'browser',
         target: 'es2020',
+        loader: {
+            '.wgsl': 'text',
+        },
         sourcemap: true,
         minify: false,
     });
