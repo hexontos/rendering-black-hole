@@ -445,11 +445,11 @@ const worldObjects: renderObjects = {
     b: blackHole,
     spheres: [
         {
-            pos: vec3(2.5 * SCHWARZSCHILD_RADIUS, 0, 0),
+            pos: vec3(-2.5 * SCHWARZSCHILD_RADIUS, 0, 0),
             radius: 0.65 * SCHWARZSCHILD_RADIUS,
-            emission: rgb(255, 255, 140),
-            reflectivity: rgb(1, 1, 1), // normalized 0..1 per channel
-            roughness: 0,
+            emission: rgb(255, 230, 140),
+            reflectivity: rgb(0.25, 1, 0.76), // normalized 0..1 per channel
+            roughness: 3,
         },
         {
             pos: vec3(10.5 * SCHWARZSCHILD_RADIUS, 0, 0),
@@ -468,7 +468,6 @@ window.addEventListener("keydown", (event) => {
 });
 
 const FPS = 30;
-cpuPipeline(ctx, image, camera, worldObjects, worldConf);
 window.setInterval(() => {
     cpuPipeline(ctx, image, camera, worldObjects, worldConf);
 }, 1000 / FPS);
