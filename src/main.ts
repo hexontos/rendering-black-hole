@@ -1,14 +1,94 @@
-import { rgb, vec3 } from "./common";
-import { cpuPipeline } from "./cpuPipeline";
-import type {
-    BlackHole,
-    Camera,
-    GeodesicRay,
-    Ray,
-    Vector3,
-    WorldConfig,
-    renderObjects,
-} from "./types";
+///////////
+// TYPES //
+///////////
+
+type RGB = {
+    r: number;
+    g: number;
+    b: number;
+};
+
+type Vector3 = { // go back to list, its mind dumbingly easier to manipulate with it <--------- NOTE
+    x: number;
+    y: number;
+    z: number;
+};
+
+type SchwarzschildRadius = number;
+
+// stars or other scene objects circling the black hole.
+type Sphere = {
+    pos: Vector3;
+    radius: number;
+    emission: RGB;
+    reflectivity: RGB;
+    roughness: number;
+};
+
+type BlackHole = Sphere & {
+    mass: number;
+    schwarzschildRadius: SchwarzschildRadius;
+    gravity: number;
+};
+
+type RenderOBJ = Sphere | BlackHole;
+
+type renderObjects = {
+    b: BlackHole;
+    spheres: Sphere[];
+};
+
+type Ray = {
+    // cartesian state.
+    pos: Vector3;
+    dir: Vector3;
+    // polar state
+    r: number;
+    phi: number;
+    // seed velocities
+    dr: number;
+    dphi: number;
+};
+
+type GeodesicRay = Ray & {
+    // Conserved quantities (in Schwarzschild spacetime)
+    E: number;
+    L: number;
+};
+
+type Camera = {
+    target: BlackHole;
+    radius: number;
+    yaw: number;
+    pitch: number;
+    focalLength: number;
+};
+
+type INTERSECTION =
+    | {
+        collided: true;
+        point: Vector3;
+        dist: number;
+        normal: Vector3;
+        object: RenderOBJ;
+    }
+    | {
+        collided: false;
+        dist: number;
+    };
+
+type WorldConfig = {
+    screenWidth: number;
+    screenHeight: number;
+    simWidth: number;
+    simHeight: number;
+    c: number;
+    g: number;
+    solarMass: number;
+    sagittariusAMass: number;
+    worldCenter: Vector3;
+    screenCenter: Vector3;
+};
 
 ////////////////////
 // Event Listener //
@@ -31,6 +111,10 @@ const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step: numbe
 /////////////////////
 // ARROW FUNCTIONS //
 /////////////////////
+
+const rgb = (r: number, g: number, b: number) => ({ r, g, b } satisfies RGB);
+
+const vec3 = (x: number, y: number, z: number) => ({ x, y, z } satisfies Vector3);
 
 const ray = (pos: Vector3, dir: Vector3): Ray => {
     const r = Math.hypot(pos.x, pos.y);
@@ -61,6 +145,197 @@ const gRay = (ray: Ray, blackHole: BlackHole): GeodesicRay => {
         L,
     };
 };
+
+/////////////////////////
+// CPU PIPELINE RENDER //
+/////////////////////////
+
+const reflect = (direction: Vector3, normal: Vector3): Vector3 => {
+    return sub(direction, mul(normal, dot(direction, normal) * 2));
+};
+
+const mulParts = (a: Vector3, b: Vector3): Vector3 => {
+    return vec3(a.x * b.x, a.y * b.y, a.z * b.z);
+};
+
+const dot = (a: Vector3, b: Vector3): number => {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+};
+
+const mag = (a: Vector3): number => {
+    return Math.sqrt(a.x ** 2 + a.y ** 2 + a.z ** 2);
+};
+
+const mul = (a: Vector3, b: number): Vector3 => {
+    return vec3(a.x * b, a.y * b, a.z * b);
+};
+
+const sub = (a: Vector3, b: Vector3): Vector3 => {
+    return vec3(a.x - b.x, a.y - b.y, a.z - b.z);
+};
+
+const add = (a: Vector3, b: Vector3): Vector3 => {
+    return vec3(a.x + b.x, a.y + b.y, a.z + b.z);
+};
+
+const normalize = (vector: Vector3): Vector3 => {
+    const { x, y, z } = vector;
+    const magV = 1 / mag(vector);
+    return vec3(x*magV, y*magV, z*magV);
+};
+
+const intersection = (origin: Vector3, direction: Vector3, objects: RenderOBJ[]): INTERSECTION => {
+    let minDist: number = Infinity;
+    let closestIntersection: Extract<INTERSECTION, { collided: true }> | undefined;
+    let collided: boolean = false;
+    let closestObject: RenderOBJ | undefined;
+
+    for (const object of objects) {
+        let currentIntersection: INTERSECTION;
+
+        const sphereRay = sub(object.pos, origin);
+        const distSphereRay = mag(sphereRay);
+        const distToClosestPointOnRay = dot(sphereRay, direction);
+        const distFromClosestPointToSphere = Math.sqrt(
+            Math.max(0, distSphereRay ** 2 - distToClosestPointOnRay ** 2),
+        );
+
+        const distToIntersection = distToClosestPointOnRay - Math.sqrt(
+            Math.abs(object.radius ** 2 - distFromClosestPointToSphere ** 2),
+        );
+        const point = add(origin, mul(direction, distToIntersection));
+        let normal = normalize(sub(point, object.pos));
+
+        // calc roughness
+        normal = normalize(add(normal, mul(vec3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5), object.roughness)));
+
+        if (distToClosestPointOnRay > 0 && distFromClosestPointToSphere < object.radius) {
+            currentIntersection = {
+                collided: true,
+                dist: distToIntersection,
+                point,
+                normal,
+                object,
+            };
+        } else {
+            currentIntersection = {
+                collided: false,
+                dist: Infinity,
+            };
+        }
+
+        if (currentIntersection.collided && currentIntersection.dist < minDist) {
+            closestIntersection = currentIntersection;
+            closestObject = object;
+            minDist = currentIntersection.dist;
+        }
+
+        collided = collided || currentIntersection.collided;
+    }
+
+    if (collided && closestIntersection != null && closestObject != null) {
+        return {
+            collided: true,
+            point: closestIntersection.point,
+            dist: closestIntersection.dist,
+            normal: closestIntersection.normal,
+            object: closestObject,
+        };
+    }
+
+    return {
+        collided: false,
+        dist: Infinity,
+    };
+};
+
+const trace = (origin: Vector3, direction: Vector3, renderObjects: RenderOBJ[], steps: number): Vector3 => {
+    const hit = intersection(origin, direction, renderObjects);
+
+    if (hit.collided && steps > 0) {
+        const reflectedOrigin = hit.point;
+        const reflectedDirection = reflect(direction, hit.normal);
+        return add(
+            vec3(hit.object.emission.r, hit.object.emission.g, hit.object.emission.b),
+            mulParts(
+                trace(reflectedOrigin, reflectedDirection, renderObjects.filter((o) => o !== hit.object), steps - 1),
+                vec3(hit.object.reflectivity.r, hit.object.reflectivity.g, hit.object.reflectivity.b),
+            ),
+        );
+    }
+
+    return vec3(0, 0, 0);
+};
+
+const cpuPixelIndex = (x: number, y: number, screenWidth: number): number => (y * screenWidth + x) * 4;
+
+const cpuRenderRadientBG = (image: ImageData, wc: WorldConfig): void => {
+    const SCREEN_WIDTH = wc.screenWidth;
+    const SCREEN_HEIGHT = wc.screenHeight;
+
+    const pixels: ImageDataArray = image.data;
+
+    for (let y = 0; y < SCREEN_HEIGHT; y++) {
+        const v = y / Math.max(SCREEN_HEIGHT - 1, 1);
+        for (let x = 0; x < SCREEN_WIDTH; x++) {
+            const u = x / Math.max(SCREEN_WIDTH - 1, 1);
+            const i = cpuPixelIndex(x, y, SCREEN_WIDTH);
+
+            pixels[i + 0] = Math.round(255 * u);
+            pixels[i + 1] = Math.round(255 * v);
+            pixels[i + 2] = Math.round(255 * (1.0 - u));
+            pixels[i + 3] = 255;
+        }
+    }
+};
+
+const cpuRenderRayTracing = (
+    _ctx: CanvasRenderingContext2D,
+    image: ImageData,
+    camera: Camera,
+    worldObjects: renderObjects,
+    wc: WorldConfig,
+): void => {
+    const SCREEN_WIDTH = wc.screenWidth;
+    const SCREEN_HEIGHT = wc.screenHeight;
+    const pixels: ImageDataArray = image.data;
+    const samples = 4; // for computing randomness like roughness material in spheres
+
+    // each pixel in canvas
+    for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
+        for (let i: number = 0; i < SCREEN_WIDTH; i++) {
+            const x: number = i - SCREEN_WIDTH * 0.5;
+            const y: number = j - SCREEN_HEIGHT * 0.5;
+
+            let pixel: Vector3 = vec3(0, 0, 0);
+            let rayDirection = normalize(vec3(x, y, camera.focalLength));
+
+            // blackhole
+            pixel = add(pixel, trace(vec3(0, 0, 0), rayDirection, [worldObjects.b], samples))
+
+            // save computational steps if we hit blachole
+            //if (pixel == rgb(0, 0, 0))
+            
+            // spheres
+            for (let n: number = 0; n < samples; n++) {
+                pixel = add(pixel, trace(vec3(0, 0, 0), rayDirection, worldObjects.spheres, samples))
+                //pixel = add(pixel, trace([0, 0, 0], rayDirection, worldObjects, 4));
+            }
+        }
+    }
+};
+
+function cpuPipeline(
+    ctx: CanvasRenderingContext2D,
+    image: ImageData,
+    camera: Camera,
+    worldObjects: renderObjects,
+    wc: WorldConfig,
+): void {
+    cpuRenderRadientBG(image, wc);
+    cpuRenderRayTracing(ctx, image, camera, worldObjects, wc);
+    ctx.putImageData(image, 0, 0);
+}
 
 ///////////////
 // CONSTANTS //
@@ -123,9 +398,7 @@ const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
 
 window.addEventListener("keydown", (event) => {
     handleCameraKeyArrows(event, camera);
+    cpuPipeline(ctx, image, camera, worldObjects, worldConf);
 });
 
-// main loop
-while (true) {
-    cpuPipeline(ctx, image, worldObjects, worldConf);
-}
+cpuPipeline(ctx, image, camera, worldObjects, worldConf);
