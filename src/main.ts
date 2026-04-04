@@ -1,91 +1,36 @@
-///////////
-// TYPES //
-///////////
+import { rgb, vec3 } from "./common";
+import { cpuPipeline } from "./cpuPipeline";
+import type {
+    BlackHole,
+    Camera,
+    GeodesicRay,
+    Ray,
+    Vector3,
+    WorldConfig,
+    renderObjects,
+} from "./types";
 
-//import { assert } from "node:console";
+////////////////////
+// Event Listener //
+////////////////////
 
-//type Byte = number & { readonly __brand: unique symbol };
 
-type RGB = {
-    r: number;
-    g: number;
-    b: number;
-};
+const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step: number = 0.1): void => {
+    if (event.key === "ArrowLeft") {
+        camera.yaw -= step;
+        event.preventDefault();
+    };
 
-type Vector3 = { // go back to list, its mind dumbingly easier to manipulate with it <--------- NOTE
-    x: number;
-    y: number;
-    z: number;
-};
-
-type SchwarzschildRadius = number;
-
-// stars or other scene objects circling the black hole.
-type Sphere = {
-    pos: Vector3;
-    radius: number;
-    emission: RGB;
-    reflectivity: RGB;
-    roughness: number;
-};
-
-type BlackHole = Sphere & {
-    mass: number;
-    schwarzschildRadius: SchwarzschildRadius;
-    gravity: number;
-};
-
-type RenderOBJ = Sphere | BlackHole
-type renderObjects = {
-    b: BlackHole;
-    spheres: Sphere[];
+    if (event.key === "ArrowRight") {
+        camera.yaw += step;
+        event.preventDefault();
+    };
 }
 
-type Ray = {
-    // cartesian state.
-    pos: Vector3;
-    dir: Vector3;
-    // polar state
-    r: number;
-    phi: number;
-    // seed velocities
-    dr: number;
-    dphi: number;
-};
 
-type GeodesicRay = Ray & {
-    // Conserved quantities (in Schwarzschild spacetime)
-    E: number;
-    L: number;
-};
-
-type Camera = {
-    pos: Vector3;
-    fixedView: Vector3;
-    angle: number;
-    distance: number;
-};
-
-type WorldConfig = {
-    screenWidth: number;
-    screenHeight: number;
-    simWidth: number;
-    simHeight: number;
-    c: number;
-    g: number;
-    solarMass: number;
-    sagittariusAMass: number;
-    worldCenter: Vector3;
-    screenCenter: Vector3;
-};
-
-////////////////////
-// CREATE OBJECTS //
-////////////////////
-
-const rgb = (r: number, g: number, b: number) => ({r, g, b} satisfies RGB);
-
-const vec3 = (x: number, y: number, z: number) => ({ x, y, z } satisfies Vector3);
+/////////////////////
+// ARROW FUNCTIONS //
+/////////////////////
 
 const ray = (pos: Vector3, dir: Vector3): Ray => {
     const r = Math.hypot(pos.x, pos.y);
@@ -163,79 +108,24 @@ const blackHole = {
     roughness: 0,
 } satisfies BlackHole;
 
-const cameraOffset = 
+
 const camera = {
-    pos: blackHole.pos * 2,
-    fixedView: blackHole.pos,
-    angle: 0,
-    distance: 0.5,
+    target: blackHole,
+    radius: 10000000,
+    yaw: 0,
+    pitch: 0,
+    focalLength: 50,
 } satisfies Camera;
 
-const worldObjects: renderObjects = {b: blackHole, spheres: []};
+const worldObjects: renderObjects = { b: blackHole, spheres: [] };
 
 const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
 
-// each pixel in canvas
-for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
-    for (let i: number = 0; i < SCREEN_WIDTH; i++) {
-        const x: number = i - SCREEN_WIDTH * 0.5;
-        const y: number = j - SCREEN_HEIGHT * 0.5;
+window.addEventListener("keydown", (event) => {
+    handleCameraKeyArrows(event, camera);
+});
 
-
-    }
-}
-
-const cpuPixelIndex = (x: number, y: number): number => (y * SCREEN_WIDTH + x) * 4;
-
-const cpuRenderRadientBG = (ctx: CanvasRenderingContext2D, image: ImageData, wc: WorldConfig): void => {
-    const SCREEN_WIDTH = wc.screenWidth;
-    const SCREEN_HEIGHT = wc.screenHeight;
-
-    const pixels: ImageDataArray = image.data;
-
-    const cpuPixelIndex = (x: number, y: number): number => (y * SCREEN_WIDTH + x) * 4;
-
-    for (let y = 0; y < SCREEN_HEIGHT; y++) {
-        const v = y / Math.max(SCREEN_HEIGHT - 1, 1);
-        for (let x = 0; x < SCREEN_WIDTH; x++) {
-            const u = x / Math.max(SCREEN_WIDTH - 1, 1);
-            const i = cpuPixelIndex(x, y);
-
-            pixels[i + 0] = Math.round(255 * u);
-            pixels[i + 1] = Math.round(255 * v);
-            pixels[i + 2] = Math.round(255 * (1.0 - u));
-            pixels[i + 3] = 255;
-        }
-    }
-
-    ctx.putImageData(image, 0, 0);
-}
-
-const cpuRenderRayTracing = (ctx: CanvasRenderingContext2D, image: ImageData, worldObjects: renderObjects, wc: WorldConfig) => {
-    const SCREEN_WIDTH = wc.screenWidth;
-    const SCREEN_HEIGHT = wc.screenHeight;
-    const pixels: ImageDataArray = image.data;
-    const samples = 4;
-
-    for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
-        for (let i: number = 0; i < SCREEN_WIDTH; i++) {
-            let x: number = i - SCREEN_WIDTH * 0.5;
-            let y: number = j - SCREEN_HEIGHT * 0.5;
-
-            let pixel: RGB = rgb(0, 0, 0)
-
-            // blackhole
-
-
-            // spheres
-            for (let i: number = 0; i < samples; i++) {
-                //pixel = add(pixel, trace([0, 0, 0], rayDirection, worldObjects, 4));
-            };
-        }
-    }
-}
-
-function cpuPipeline(worldObjects: renderObjects) {
-    cpuRenderRadientBG(ctx, image, SCREEN_WIDTH, SCREEN_HEIGHT);
-    cpuRenderRayTracing()
+// main loop
+while (true) {
+    cpuPipeline(ctx, image, worldObjects, worldConf);
 }
