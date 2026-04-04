@@ -90,12 +90,20 @@ type WorldConfig = {
     screenCenter: Vector3;
 };
 
+type MouseDrag = {
+    active: boolean;
+    lastX: number;
+    lastY: number;
+};
+
 ////////////////////
 // Event Listener //
 ////////////////////
 
 
 const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step: number = 0.1): void => {
+    const pitchLimit = Math.PI * 0.5 - 0.01;
+
     if (event.key === "ArrowLeft") {
         camera.yaw -= step;
         event.preventDefault();
@@ -105,8 +113,40 @@ const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step: numbe
         camera.yaw += step;
         event.preventDefault();
     };
+
+    if (event.key === "ArrowUp") {
+        camera.pitch += step;
+        camera.pitch = Math.min(camera.pitch, pitchLimit);
+        event.preventDefault();
+    }
+
+    if (event.key === "ArrowDown") {
+        camera.pitch -= step;
+        camera.pitch = Math.max(camera.pitch, -pitchLimit);
+        event.preventDefault();
+    }
 }
 
+const handleCameraMouseDrag = (
+    event: MouseEvent,
+    camera: Camera,
+    mouseDrag: MouseDrag,
+    sensitivity: number = 0.005,
+): void => {
+    if (!mouseDrag.active) return;
+
+    const dx = event.clientX - mouseDrag.lastX;
+    const dy = event.clientY - mouseDrag.lastY;
+
+    mouseDrag.lastX = event.clientX;
+    mouseDrag.lastY = event.clientY;
+
+    camera.yaw += dx * sensitivity;
+    camera.pitch -= dy * sensitivity;
+
+    const pitchLimit = Math.PI * 0.5 - 0.01;
+    camera.pitch = Math.max(-pitchLimit, Math.min(camera.pitch, pitchLimit));
+};
 
 /////////////////////
 // ARROW FUNCTIONS //
@@ -159,10 +199,10 @@ const orbitCamera = (camera: Camera): Vector3 => {
     const center = camera.target.pos;
 
     return vec3(
-        center.x + camera.radius * Math.cos(camera.yaw),
-        center.y,
-        center.z + camera.radius * Math.sin(camera.yaw)
-    );
+          center.x + camera.radius * Math.cos(camera.pitch) * Math.cos(camera.yaw),
+          center.y + camera.radius * Math.sin(camera.pitch),
+          center.z + camera.radius * Math.cos(camera.pitch) * Math.sin(camera.yaw),
+      );
 };
 
 const cameraForward = (cPos: Vector3, camera: Camera): Vector3 => {
@@ -462,12 +502,31 @@ const worldObjects: renderObjects = {
 };
 
 const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
+const mouseDrag: MouseDrag = {
+    active: false,
+    lastX: 0,
+    lastY: 0,
+};
 
 window.addEventListener("keydown", (event) => {
     handleCameraKeyArrows(event, camera);
 });
 
-const FPS = 30;
+canvas.addEventListener("mousedown", (event) => {
+    mouseDrag.active = true;
+    mouseDrag.lastX = event.clientX;
+    mouseDrag.lastY = event.clientY;
+});
+
+window.addEventListener("mousemove", (event) => {
+    handleCameraMouseDrag(event, camera, mouseDrag);
+});
+
+window.addEventListener("mouseup", () => {
+    mouseDrag.active = false;
+});
+
+const FPS = 40;
 window.setInterval(() => {
     cpuPipeline(ctx, image, camera, worldObjects, worldConf);
 }, 1000 / FPS);
