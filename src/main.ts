@@ -415,13 +415,18 @@ const C = worldConf.c;
 const G = worldConf.g;
 const SAGITTARIUS_A_MASS = worldConf.sagittariusAMass;
 const WORLD_CENTER = worldConf.worldCenter;
+const SCHWARZSCHILD_RADIUS = 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2);
+
+// Scene distances below are stored in meters.
+const EVENT_HORIZON_RADIUS = SCHWARZSCHILD_RADIUS;
+const CAMERA_RADIUS = 7 * SCHWARZSCHILD_RADIUS;
 
 const blackHole = {
     pos: WORLD_CENTER,
     mass: SAGITTARIUS_A_MASS,
-    schwarzschildRadius: 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2),
+    schwarzschildRadius: SCHWARZSCHILD_RADIUS,
     gravity: G * SAGITTARIUS_A_MASS,
-    radius: 1,
+    radius: EVENT_HORIZON_RADIUS,
     emission: rgb(0, 0, 0),
     reflectivity: rgb(0, 0, 0),
     roughness: 0,
@@ -430,25 +435,25 @@ const blackHole = {
 
 const camera = {
     target: blackHole,
-    radius: 45,
+    radius: CAMERA_RADIUS,
     yaw: 0,
     pitch: 0,
-    focalLength: 700,
+    focalLength: 600,
 } satisfies Camera;
 
 const worldObjects: renderObjects = {
     b: blackHole,
     spheres: [
         {
-            pos: vec3(24, -3, 0),
-            radius: 4,
-            emission: rgb(255, 210, 140),
-            reflectivity: rgb(1, 1, 1),
+            pos: vec3(2.5 * SCHWARZSCHILD_RADIUS, 0, 0),
+            radius: 0.65 * SCHWARZSCHILD_RADIUS,
+            emission: rgb(255, 255, 140),
+            reflectivity: rgb(1, 1, 1), // normalized 0..1 per channel
             roughness: 0,
         },
         {
-            pos: vec3(60, 6, 5),
-            radius: 5,
+            pos: vec3(10.5 * SCHWARZSCHILD_RADIUS, 0, 0),
+            radius: 0.8 * SCHWARZSCHILD_RADIUS,
             emission: rgb(255, 255, 0),
             reflectivity: rgb(0, 0, 0),
             roughness: 0,
