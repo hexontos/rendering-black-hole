@@ -150,6 +150,34 @@ const gRay = (ray: Ray, blackHole: BlackHole): GeodesicRay => {
 // CPU PIPELINE RENDER //
 /////////////////////////
 
+const cross = (a: Vector3, b: Vector3): Vector3 => {
+    return vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+};
+
+const orbitCamera = (camera: Camera): Vector3 => {
+    // for now only x&z axis
+    const center = camera.target.pos;
+
+    return vec3(
+        center.x + camera.radius * Math.cos(camera.yaw),
+        center.y,
+        center.z + camera.radius * Math.sin(camera.yaw)
+    );
+};
+
+const cameraForward = (cPos: Vector3, camera: Camera): Vector3 => {
+    return normalize(sub(camera.target.pos, cPos));
+};
+
+const cameraUp = (forward: Vector3, right: Vector3): Vector3 => {
+    return normalize(cross(forward, right));
+};
+
+const cameraRight = (forward: Vector3): Vector3 => {
+    const worldUp = vec3(0, 1, 0);
+    return normalize(cross(worldUp, forward));
+};
+
 const reflect = (direction: Vector3, normal: Vector3): Vector3 => {
     return sub(direction, mul(normal, dot(direction, normal) * 2));
 };
@@ -163,7 +191,9 @@ const dot = (a: Vector3, b: Vector3): number => {
 };
 
 const mag = (a: Vector3): number => {
-    return Math.sqrt(a.x ** 2 + a.y ** 2 + a.z ** 2);
+    const ret = Math.sqrt(a.x ** 2 + a.y ** 2 + a.z ** 2)
+    if (ret === 0) return 1;
+    return ret;
 };
 
 const mul = (a: Vector3, b: number): Vector3 => {
@@ -289,6 +319,9 @@ const cpuRenderRadientBG = (image: ImageData, wc: WorldConfig): void => {
     }
 };
 
+const toneMap = (value: number): number => 255 * (1 - Math.exp(-value * 0.02));
+const toByte = (value: number): number => Math.max(0, Math.min(255, Math.round(toneMap(value))));
+
 const cpuRenderRayTracing = (
     _ctx: CanvasRenderingContext2D,
     image: ImageData,
@@ -301,26 +334,37 @@ const cpuRenderRayTracing = (
     const pixels: ImageDataArray = image.data;
     const samples = 4; // for computing randomness like roughness material in spheres
 
+    const cameraPos = orbitCamera(camera);
+    const forward = cameraForward(cameraPos, camera);
+    const right = cameraRight(forward);
+    const up = cameraUp(forward, right);
+
     // each pixel in canvas
     for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
         for (let i: number = 0; i < SCREEN_WIDTH; i++) {
             const x: number = i - SCREEN_WIDTH * 0.5;
             const y: number = j - SCREEN_HEIGHT * 0.5;
 
+            const rayDirection = normalize(add(add(mul(right, x), mul(up, -y),), mul(forward, camera.focalLength)));
+            const rayOrigin = cameraPos;
+            const firstHit = intersection(rayOrigin, rayDirection, [worldObjects.b, ...worldObjects.spheres]);
+
+            if (!firstHit.collided) continue;
+
             let pixel: Vector3 = vec3(0, 0, 0);
-            let rayDirection = normalize(vec3(x, y, camera.focalLength));
-
-            // blackhole
-            pixel = add(pixel, trace(vec3(0, 0, 0), rayDirection, [worldObjects.b], samples))
-
-            // save computational steps if we hit blachole
-            //if (pixel == rgb(0, 0, 0))
             
             // spheres
             for (let n: number = 0; n < samples; n++) {
-                pixel = add(pixel, trace(vec3(0, 0, 0), rayDirection, worldObjects.spheres, samples))
+                pixel = add(pixel, trace(rayOrigin, rayDirection, [worldObjects.b, ...worldObjects.spheres], samples));
                 //pixel = add(pixel, trace([0, 0, 0], rayDirection, worldObjects, 4));
-            }
+            };
+
+            pixel = mul(pixel, 1/samples);
+            const index = cpuPixelIndex(i, j, SCREEN_WIDTH);
+            pixels[index + 0] = toByte(pixel.x);
+            pixels[index + 1] = toByte(pixel.y);
+            pixels[index + 2] = toByte(pixel.z);
+            pixels[index + 3] = 255;
         }
     }
 };
@@ -386,19 +430,40 @@ const blackHole = {
 
 const camera = {
     target: blackHole,
-    radius: 10000000,
+    radius: 45,
     yaw: 0,
     pitch: 0,
-    focalLength: 50,
+    focalLength: 700,
 } satisfies Camera;
 
-const worldObjects: renderObjects = { b: blackHole, spheres: [] };
+const worldObjects: renderObjects = {
+    b: blackHole,
+    spheres: [
+        {
+            pos: vec3(24, -3, 0),
+            radius: 4,
+            emission: rgb(255, 210, 140),
+            reflectivity: rgb(1, 1, 1),
+            roughness: 0,
+        },
+        {
+            pos: vec3(60, 6, 5),
+            radius: 5,
+            emission: rgb(255, 255, 0),
+            reflectivity: rgb(0, 0, 0),
+            roughness: 0,
+        },
+    ],
+};
 
 const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
 
 window.addEventListener("keydown", (event) => {
     handleCameraKeyArrows(event, camera);
-    cpuPipeline(ctx, image, camera, worldObjects, worldConf);
 });
 
+const FPS = 30;
 cpuPipeline(ctx, image, camera, worldObjects, worldConf);
+window.setInterval(() => {
+    cpuPipeline(ctx, image, camera, worldObjects, worldConf);
+}, 1000 / FPS);
