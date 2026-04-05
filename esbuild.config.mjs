@@ -7,11 +7,14 @@ const isWatch = process.argv.includes('--watch');
 if (isWatch) {
     // Watch mode - use context()
     const ctx = await esbuild.context({
-        entryPoints: ['./src/demo/rayRender3d.ts'],
+        entryPoints: ['./src/main.ts'],
         bundle: true,
         outfile: './dist/bundle.js',
         platform: 'browser',
         target: 'es2020',
+        loader: {
+            '.wgsl': 'text',
+        },
         sourcemap: true,
         minify: false,
     });
@@ -21,11 +24,14 @@ if (isWatch) {
 } else {
     // Build mode
     await esbuild.build({
-        entryPoints: ['./src/demo/rayRender3d.ts'],
+        entryPoints: ['./src/main.ts'],
         bundle: true,
         outfile: './dist/bundle.js',
         platform: 'browser',
         target: 'es2020',
+        loader: {
+            '.wgsl': 'text',
+        },
         sourcemap: true,
         minify: false,
     });

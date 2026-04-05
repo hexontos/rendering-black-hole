@@ -2,16 +2,15 @@
   "compilerOptions": {
     // File Layout
     "rootDir": "./src",
-    //"outDir": "./dist",  // Uncomment this
     
     // Environment Settings - CRITICAL CHANGES:
     "module": "ESNext",
     "target": "ES2020",
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],  // 4 browser APIs
-    "types": [],                  // Keep empty or add "@types/webgl2"
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": ["@webgpu/types"], 
     
     // Module resolution
-    "moduleResolution": "bundler",  // 4 modern bundlers
+    "moduleResolution": "bundler",
     
     // Other Outputs
     "sourceMap": true,
@@ -37,8 +36,7 @@
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
     "skipLibCheck": true,
-    
-    // 4 web project:
+
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "resolveJsonModule": true
