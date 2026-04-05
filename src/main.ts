@@ -77,6 +77,17 @@ type INTERSECTION =
         dist: number;
     };
 
+type PLANE_INTERSECTION =
+    | {
+        collided: true;
+        dist: number;
+        point: Vector3;
+    }
+    | {
+        collided: false;
+        dist: number;
+    };
+
 type WorldConfig = {
     screenWidth: number;
     screenHeight: number;
@@ -254,6 +265,166 @@ const normalize = (vector: Vector3): Vector3 => {
     return vec3(x*magV, y*magV, z*magV);
 };
 
+const intersectPlane = (origin: Vector3, direction: Vector3, planeY: number): PLANE_INTERSECTION => {
+    if (Math.abs(direction.y) < 1e-9) {
+        return {
+            collided: false,
+            dist: Infinity,
+        };
+    }
+
+    const dist = (planeY - origin.y) / direction.y;
+    if (dist <= 0) {
+        return {
+            collided: false,
+            dist: Infinity,
+        };
+    }
+
+    return {
+        collided: true,
+        dist,
+        point: add(origin, mul(direction, dist)),
+    };
+};
+
+const sampleGrid = (point: Vector3, cellSize: number, lineWidth: number, halfSize: number): Vector3 | null => {
+    const local = sub(point, blackHole.pos);
+    if (Math.abs(local.x) > halfSize || Math.abs(local.z) > halfSize) return null;
+
+    const gx = ((local.x % cellSize) + cellSize) % cellSize;
+    const gz = ((local.z % cellSize) + cellSize) % cellSize;
+
+    const onLine =
+        gx < lineWidth ||
+        gx > cellSize - lineWidth ||
+        gz < lineWidth ||
+        gz > cellSize - lineWidth;
+
+    if (onLine) return vec3(255, 255, 255);
+    return null;
+};
+
+const gridVertexY = (
+    localX: number,
+    localZ: number,
+    baseY: number,
+    maxDrop: number,
+    halfSize: number,
+): number => {
+    const radialDist = Math.sqrt(localX ** 2 + localZ ** 2);
+    const edgeT = Math.max(0, 1 - radialDist / halfSize);
+    const strength = (Math.exp(4 * edgeT) - 1) / (Math.exp(4) - 1);
+    return baseY - maxDrop * strength;
+};
+
+const projectPoint = (
+    point: Vector3,
+    cameraPos: Vector3,
+    forward: Vector3,
+    right: Vector3,
+    up: Vector3,
+    wc: WorldConfig,
+    focalLength: number,
+): { x: number; y: number } | null => {
+    const relative = sub(point, cameraPos);
+    const depth = dot(relative, forward);
+    if (depth <= 0) return null;
+
+    const screenX = wc.screenWidth * 0.5 + focalLength * dot(relative, right) / depth;
+    const screenY = wc.screenHeight * 0.5 - focalLength * dot(relative, up) / depth;
+
+    return {
+        x: screenX,
+        y: screenY,
+    };
+};
+
+const drawLineToImage = (
+    image: ImageData,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    color: Vector3,
+    wc: WorldConfig,
+): void => {
+    const pixels: ImageDataArray = image.data;
+    let ix0 = Math.round(x0);
+    let iy0 = Math.round(y0);
+    const ix1 = Math.round(x1);
+    const iy1 = Math.round(y1);
+
+    const dx = Math.abs(ix1 - ix0);
+    const dy = Math.abs(iy1 - iy0);
+    const sx = ix0 < ix1 ? 1 : -1;
+    const sy = iy0 < iy1 ? 1 : -1;
+    let err = dx - dy;
+
+    while (true) {
+        if (ix0 >= 0 && ix0 < wc.screenWidth && iy0 >= 0 && iy0 < wc.screenHeight) {
+            const index = cpuPixelIndex(ix0, iy0, wc.screenWidth);
+            pixels[index + 0] = Math.round(color.x);
+            pixels[index + 1] = Math.round(color.y);
+            pixels[index + 2] = Math.round(color.z);
+            pixels[index + 3] = 255;
+        }
+
+        if (ix0 === ix1 && iy0 === iy1) break;
+
+        const e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            ix0 += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            iy0 += sy;
+        }
+    }
+};
+
+const intersectDisc = (origin: Vector3, direction: Vector3): PLANE_INTERSECTION => {
+    const discPlane = intersectPlane(origin, direction, blackHole.pos.y);
+
+    if (discPlane.collided) {
+        const local = sub(discPlane.point, blackHole.pos);
+        const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
+        const innerRadius = 1.5 * SCHWARZSCHILD_RADIUS; // photon sphere for Schwarzschild black hole.
+        const outerRadius = 2.6 * SCHWARZSCHILD_RADIUS;
+
+        if (radialDist >= innerRadius && radialDist <= outerRadius) {
+            return discPlane;
+        }
+    }
+
+    return {
+        collided: false,
+        dist: Infinity,
+    };
+};
+
+const sampleDisc = (origin: Vector3, point: Vector3): Vector3 => {
+    const local = sub(point, blackHole.pos);
+    const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
+    const innerRadius = 1.5 * SCHWARZSCHILD_RADIUS;
+    const outerRadius = 2.6 * SCHWARZSCHILD_RADIUS;
+    const cameraAxis = normalize(vec3(origin.x - blackHole.pos.x, 0, origin.z - blackHole.pos.z));
+    const axisCoord = dot(local, cameraAxis);
+    const axisT = Math.max(0, Math.min(1, 0.5 - 0.5 * axisCoord / outerRadius));
+    const radialT = Math.max(0, Math.min(1, (radialDist - innerRadius) / (outerRadius - innerRadius)));
+
+    return vec3(
+        255,
+        85 + 120 * axisT + 45 * radialT,
+        0 + 8 * axisT + 18 * radialT,
+    );
+};
+
+const traceBackgroundGrid = (_origin: Vector3, _direction: Vector3): Vector3 | null => {
+    return null;
+};
+
 const intersection = (origin: Vector3, direction: Vector3, objects: RenderOBJ[]): INTERSECTION => {
     let minDist: number = Infinity;
     let closestIntersection: Extract<INTERSECTION, { collided: true }> | undefined;
@@ -319,22 +490,96 @@ const intersection = (origin: Vector3, direction: Vector3, objects: RenderOBJ[])
     };
 };
 
-const trace = (origin: Vector3, direction: Vector3, renderObjects: RenderOBJ[], steps: number): Vector3 => {
+const trace = (origin: Vector3, direction: Vector3, renderObjects: RenderOBJ[], steps: number): Vector3 | null => {
     const hit = intersection(origin, direction, renderObjects);
+    const discHit = intersectDisc(origin, direction);
+
+    if (discHit.collided && (!hit.collided || discHit.dist < hit.dist)) {
+        return sampleDisc(origin, discHit.point);
+    }
 
     if (hit.collided && steps > 0) {
         const reflectedOrigin = hit.point;
         const reflectedDirection = reflect(direction, hit.normal);
+        const reflectedColor = trace(
+            reflectedOrigin,
+            reflectedDirection,
+            renderObjects.filter((o) => o !== hit.object),
+            steps - 1,
+        );
         return add(
             vec3(hit.object.emission.r, hit.object.emission.g, hit.object.emission.b),
-            mulParts(
-                trace(reflectedOrigin, reflectedDirection, renderObjects.filter((o) => o !== hit.object), steps - 1),
-                vec3(hit.object.reflectivity.r, hit.object.reflectivity.g, hit.object.reflectivity.b),
-            ),
+            reflectedColor == null
+                ? vec3(0, 0, 0)
+                : mulParts(
+                    reflectedColor,
+                    vec3(hit.object.reflectivity.r, hit.object.reflectivity.g, hit.object.reflectivity.b),
+                ),
         );
     }
 
-    return vec3(0, 0, 0);
+    return traceBackgroundGrid(origin, direction);
+};
+
+const cpuRenderGravityGrid = (
+    image: ImageData,
+    camera: Camera,
+    wc: WorldConfig,
+): void => {
+    const baseY = blackHole.pos.y - 0.7 * SCHWARZSCHILD_RADIUS;
+    const halfSize = 3.5 * SCHWARZSCHILD_RADIUS;
+    const cellSize = 0.35 * SCHWARZSCHILD_RADIUS;
+    const maxDrop = 1.8 * SCHWARZSCHILD_RADIUS;
+    const gridSteps = Math.round((2 * halfSize) / cellSize);
+    const lineColor = vec3(255, 255, 255);
+
+    const cameraPos = orbitCamera(camera);
+    const forward = cameraForward(cameraPos, camera);
+    const right = cameraRight(forward);
+    const up = cameraUp(forward, right);
+
+    const projected: ({ x: number; y: number } | null)[][] = [];
+
+    for (let z = 0; z <= gridSteps; z++) {
+        const row: ({ x: number; y: number } | null)[] = [];
+        for (let x = 0; x <= gridSteps; x++) {
+            const localX = -halfSize + x * cellSize;
+            const localZ = -halfSize + z * cellSize;
+            const point = vec3(
+                blackHole.pos.x + localX,
+                gridVertexY(localX, localZ, baseY, maxDrop, halfSize),
+                blackHole.pos.z + localZ,
+            );
+
+            row.push(projectPoint(point, cameraPos, forward, right, up, wc, camera.focalLength));
+        }
+        projected.push(row);
+    }
+
+    for (let z = 0; z <= gridSteps; z++) {
+        const row = projected[z];
+        if (row == null) continue;
+        const nextRow = projected[z + 1];
+
+        for (let x = 0; x <= gridSteps; x++) {
+            const current = row[x];
+            if (current == null) continue;
+
+            if (x < gridSteps) {
+                const horizontal = row[x + 1];
+                if (horizontal != null) {
+                    drawLineToImage(image, current.x, current.y, horizontal.x, horizontal.y, lineColor, wc);
+                }
+            }
+
+            if (z < gridSteps && nextRow != null) {
+                const vertical = nextRow[x];
+                if (vertical != null) {
+                    drawLineToImage(image, current.x, current.y, vertical.x, vertical.y, lineColor, wc);
+                }
+            }
+        }
+    }
 };
 
 const cpuPixelIndex = (x: number, y: number, screenWidth: number): number => (y * screenWidth + x) * 4;
@@ -350,10 +595,29 @@ const cpuRenderRadientBG = (image: ImageData, wc: WorldConfig): void => {
         for (let x = 0; x < SCREEN_WIDTH; x++) {
             const u = x / Math.max(SCREEN_WIDTH - 1, 1);
             const i = cpuPixelIndex(x, y, SCREEN_WIDTH);
+            const topLeft = vec3(255, 48, 48);
+            const topRight = vec3(255, 220, 0);
+            const bottomLeft = vec3(24, 12, 120);
+            const bottomRight = vec3(160, 0, 255);
 
-            pixels[i + 0] = Math.round(255 * u);
-            pixels[i + 1] = Math.round(255 * v);
-            pixels[i + 2] = Math.round(255 * (1.0 - u));
+            pixels[i + 0] = Math.round(
+                topLeft.x * (1 - u) * (1 - v) +
+                topRight.x * u * (1 - v) +
+                bottomLeft.x * (1 - u) * v +
+                bottomRight.x * u * v,
+            );
+            pixels[i + 1] = Math.round(
+                topLeft.y * (1 - u) * (1 - v) +
+                topRight.y * u * (1 - v) +
+                bottomLeft.y * (1 - u) * v +
+                bottomRight.y * u * v,
+            );
+            pixels[i + 2] = Math.round(
+                topLeft.z * (1 - u) * (1 - v) +
+                topRight.z * u * (1 - v) +
+                bottomLeft.z * (1 - u) * v +
+                bottomRight.z * u * v,
+            );
             pixels[i + 3] = 255;
         }
     }
@@ -387,19 +651,23 @@ const cpuRenderRayTracing = (
 
             const rayDirection = normalize(add(add(mul(right, x), mul(up, -y),), mul(forward, camera.focalLength)));
             const rayOrigin = cameraPos;
-            const firstHit = intersection(rayOrigin, rayDirection, [worldObjects.b, ...worldObjects.spheres]);
-
-            if (!firstHit.collided) continue;
 
             let pixel: Vector3 = vec3(0, 0, 0);
+            let hitSamples = 0;
             
             // spheres
             for (let n: number = 0; n < samples; n++) {
-                pixel = add(pixel, trace(rayOrigin, rayDirection, [worldObjects.b, ...worldObjects.spheres], samples));
+                const sample = trace(rayOrigin, rayDirection, [worldObjects.b, ...worldObjects.spheres], samples);
+                if (sample != null) {
+                    pixel = add(pixel, sample);
+                    hitSamples += 1;
+                }
                 //pixel = add(pixel, trace([0, 0, 0], rayDirection, worldObjects, 4));
             };
 
-            pixel = mul(pixel, 1/samples);
+            if (hitSamples === 0) continue;
+
+            pixel = mul(pixel, 1/hitSamples);
             const index = cpuPixelIndex(i, j, SCREEN_WIDTH);
             pixels[index + 0] = toByte(pixel.x);
             pixels[index + 1] = toByte(pixel.y);
@@ -417,6 +685,7 @@ function cpuPipeline(
     wc: WorldConfig,
 ): void {
     cpuRenderRadientBG(image, wc);
+    cpuRenderGravityGrid(image, camera, wc);
     cpuRenderRayTracing(ctx, image, camera, worldObjects, wc);
     ctx.putImageData(image, 0, 0);
 }
