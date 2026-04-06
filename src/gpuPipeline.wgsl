@@ -11,6 +11,13 @@ struct SceneUniforms {
     discFarColor: vec4f,
     discRadialBoost: vec4f,
     gridLineColor: vec4f,
+    backgroundParams: vec4f,
+    backgroundStarsColor: vec4f,
+    backgroundEmptyColor: vec4f,
+    backgroundGradientTopLeft: vec4f,
+    backgroundGradientTopRight: vec4f,
+    backgroundGradientBottomLeft: vec4f,
+    backgroundGradientBottomRight: vec4f,
 };
 
 struct Sphere {
@@ -98,15 +105,97 @@ fn lerpColor(a: vec3f, b: vec3f, t: f32) -> vec3f {
     );
 }
 
-fn traceBackgroundGrid(uv: vec2f) -> vec3f {
-    let topLeft = vec3f(1.0, 48.0 / 255.0, 48.0 / 255.0);
-    let topRight = vec3f(1.0, 220.0 / 255.0, 0.0);
-    let bottomLeft = vec3f(24.0 / 255.0, 12.0 / 255.0, 120.0 / 255.0);
-    let bottomRight = vec3f(160.0 / 255.0, 0.0, 1.0);
+fn sampleGradientBackground(uv: vec2f) -> vec3f {
+    let topLeft = scene.backgroundGradientTopLeft.xyz;
+    let topRight = scene.backgroundGradientTopRight.xyz;
+    let bottomLeft = scene.backgroundGradientBottomLeft.xyz;
+    let bottomRight = scene.backgroundGradientBottomRight.xyz;
 
     let top = lerpColor(topLeft, topRight, uv.x);
     let bottom = lerpColor(bottomLeft, bottomRight, uv.x);
     return lerpColor(top, bottom, uv.y);
+}
+
+fn hash21(p: vec2f) -> f32 {
+    return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453123);
+}
+
+fn hash22(p: vec2f) -> vec2f {
+    return vec2f(
+        hash21(p + vec2f(17.0, 59.4)),
+        hash21(p + vec2f(63.1, 12.8)),
+    );
+}
+
+fn sampleStarField(direction: vec3f) -> vec3f {
+    let PI = 3.141592653589793;
+    let skyUv = vec2f(
+        atan2(direction.z, direction.x) / (2.0 * PI) + 0.5,
+        acos(clamp(direction.y, -1.0, 1.0)) / PI,
+    );
+
+    var color = scene.backgroundStarsColor.xyz;
+
+    let primaryUv = skyUv * vec2f(720.0, 360.0);
+    let primaryBaseCell = floor(primaryUv);
+
+    for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
+        for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
+            let primaryCell = primaryBaseCell + vec2f(f32(ox), f32(oy));
+            let primaryLocal = primaryUv - primaryCell - vec2f(0.5);
+            let primarySeed = hash21(primaryCell);
+
+            if (primarySeed > 1.0 - scene.backgroundParams.y) {
+                let starOffset = (hash22(primaryCell) - vec2f(0.5)) * 0.7;
+                let starDist = length(primaryLocal - starOffset);
+                let glow = smoothstep(0.14, 0.0, starDist);
+                let tintSeed = hash21(primaryCell + vec2f(19.7, 73.1));
+                var starColor = vec3f(1.0, 1.0, 1.0);
+
+                if (tintSeed > 0.992) {
+                    starColor = vec3f(1.0, 0.58, 0.42);
+                } else if (tintSeed > 0.94) {
+                    starColor = vec3f(1.0, 0.9, 0.62);
+                }
+
+                color = color + starColor * glow * (0.8 + 1.35 * hash21(primaryCell + vec2f(101.3, 7.7)));
+            }
+        }
+    }
+
+    let secondaryUv = skyUv * vec2f(1200.0, 600.0);
+    let secondaryBaseCell = floor(secondaryUv);
+
+    for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
+        for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
+            let secondaryCell = secondaryBaseCell + vec2f(f32(ox), f32(oy));
+            let secondaryLocal = secondaryUv - secondaryCell - vec2f(0.5);
+            let secondarySeed = hash21(secondaryCell + vec2f(211.0, 503.0));
+
+            if (secondarySeed > 1.0 - scene.backgroundParams.z) {
+                let starOffset = (hash22(secondaryCell + vec2f(5.2, 91.7)) - vec2f(0.5)) * 0.5;
+                let starDist = length(secondaryLocal - starOffset);
+                let glow = smoothstep(0.06, 0.0, starDist);
+                color = color + vec3f(1.0, 1.0, 1.0) * glow * 0.4;
+            }
+        }
+    }
+
+    return clamp(color, vec3f(0.0), vec3f(1.0));
+}
+
+fn sampleBackground(uv: vec2f, direction: vec3f) -> vec3f {
+    let backgroundMode = scene.backgroundParams.x;
+
+    if (backgroundMode < 0.5) {
+        return scene.backgroundEmptyColor.xyz;
+    }
+
+    if (backgroundMode < 1.5) {
+        return sampleGradientBackground(uv);
+    }
+
+    return sampleStarField(direction);
 }
 
 fn sphericalBasis(theta: f32, phi: f32) -> SphericalBasis {
@@ -389,7 +478,20 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
 
 @fragment
 fn backgroundFsMain(in: VSOut) -> @location(0) vec4f {
-    return vec4f(traceBackgroundGrid(in.uv), 1.0);
+    let width = scene.screen.x;
+    let height = scene.screen.y;
+    let focalLength = scene.screen.z;
+
+    let x = in.uv.x * width - width * 0.5;
+    let y = in.uv.y * height - height * 0.5;
+
+    let rayDirection = normalize(
+        scene.cameraRight.xyz * x +
+        scene.cameraUp.xyz * (-y) +
+        scene.cameraForward.xyz * focalLength
+    );
+
+    return vec4f(sampleBackground(in.uv, rayDirection), 1.0);
 }
 
 @fragment

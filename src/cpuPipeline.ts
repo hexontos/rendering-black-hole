@@ -277,6 +277,7 @@ const trace = (origin: Vector3, direction: Vector3, worldObjects: renderObjects,
             reflectedOrigin,
             reflectedDirection,
             {
+                background: worldObjects.background,
                 blackhole: worldObjects.blackhole,
                 disc: worldObjects.disc,
                 grid: worldObjects.grid,
@@ -364,10 +365,15 @@ const cpuRenderGravityGrid = (
 
 const cpuPixelIndex = (x: number, y: number, screenWidth: number): number => (y * screenWidth + x) * 4;
 
-const cpuRenderRadientBG = (image: ImageData, wc: WorldConfig): void => {
+const hash21 = (x: number, y: number): number => {
+    const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+    return n - Math.floor(n);
+};
+
+const cpuRenderBackground = (image: ImageData, worldObjects: renderObjects, wc: WorldConfig): void => {
     const SCREEN_WIDTH = wc.screenWidth;
     const SCREEN_HEIGHT = wc.screenHeight;
-
+    const background = worldObjects.background;
     const pixels: ImageDataArray = image.data;
 
     for (let y = 0; y < SCREEN_HEIGHT; y++) {
@@ -375,29 +381,106 @@ const cpuRenderRadientBG = (image: ImageData, wc: WorldConfig): void => {
         for (let x = 0; x < SCREEN_WIDTH; x++) {
             const u = x / Math.max(SCREEN_WIDTH - 1, 1);
             const i = cpuPixelIndex(x, y, SCREEN_WIDTH);
-            const topLeft = vec3(255, 48, 48);
-            const topRight = vec3(255, 220, 0);
-            const bottomLeft = vec3(24, 12, 120);
-            const bottomRight = vec3(160, 0, 255);
 
-            pixels[i + 0] = Math.round(
-                topLeft.x * (1 - u) * (1 - v) +
-                topRight.x * u * (1 - v) +
-                bottomLeft.x * (1 - u) * v +
-                bottomRight.x * u * v,
+            if (background.mode === "empty") {
+                pixels[i + 0] = background.empty.color.r;
+                pixels[i + 1] = background.empty.color.g;
+                pixels[i + 2] = background.empty.color.b;
+                pixels[i + 3] = 255;
+                continue;
+            }
+
+            if (background.mode === "gradient") {
+                const topLeft = vec3(background.gradient.topLeft.r, background.gradient.topLeft.g, background.gradient.topLeft.b);
+                const topRight = vec3(background.gradient.topRight.r, background.gradient.topRight.g, background.gradient.topRight.b);
+                const bottomLeft = vec3(background.gradient.bottomLeft.r, background.gradient.bottomLeft.g, background.gradient.bottomLeft.b);
+                const bottomRight = vec3(background.gradient.bottomRight.r, background.gradient.bottomRight.g, background.gradient.bottomRight.b);
+
+                pixels[i + 0] = Math.round(
+                    topLeft.x * (1 - u) * (1 - v) +
+                    topRight.x * u * (1 - v) +
+                    bottomLeft.x * (1 - u) * v +
+                    bottomRight.x * u * v,
+                );
+                pixels[i + 1] = Math.round(
+                    topLeft.y * (1 - u) * (1 - v) +
+                    topRight.y * u * (1 - v) +
+                    bottomLeft.y * (1 - u) * v +
+                    bottomRight.y * u * v,
+                );
+                pixels[i + 2] = Math.round(
+                    topLeft.z * (1 - u) * (1 - v) +
+                    topRight.z * u * (1 - v) +
+                    bottomLeft.z * (1 - u) * v +
+                    bottomRight.z * u * v,
+                );
+                pixels[i + 3] = 255;
+                continue;
+            }
+
+            let color = vec3(
+                background.stars.baseColor.r,
+                background.stars.baseColor.g,
+                background.stars.baseColor.b,
             );
-            pixels[i + 1] = Math.round(
-                topLeft.y * (1 - u) * (1 - v) +
-                topRight.y * u * (1 - v) +
-                bottomLeft.y * (1 - u) * v +
-                bottomRight.y * u * v,
-            );
-            pixels[i + 2] = Math.round(
-                topLeft.z * (1 - u) * (1 - v) +
-                topRight.z * u * (1 - v) +
-                bottomLeft.z * (1 - u) * v +
-                bottomRight.z * u * v,
-            );
+            const primaryUvX = u * 720;
+            const primaryUvY = v * 360;
+            const primaryBaseX = Math.floor(primaryUvX);
+            const primaryBaseY = Math.floor(primaryUvY);
+
+            for (let oy = -1; oy <= 1; oy++) {
+                for (let ox = -1; ox <= 1; ox++) {
+                    const cellX = primaryBaseX + ox;
+                    const cellY = primaryBaseY + oy;
+                    const localX = primaryUvX - cellX - 0.5;
+                    const localY = primaryUvY - cellY - 0.5;
+                    const primarySeed = hash21(cellX, cellY);
+
+                    if (primarySeed > 1 - background.stars.densityPrimary) {
+                        const offsetX = (hash21(cellX + 17, cellY + 59) - 0.5) * 0.7;
+                        const offsetY = (hash21(cellX + 63, cellY + 12) - 0.5) * 0.7;
+                        const starDist = Math.hypot(localX - offsetX, localY - offsetY);
+                        const glow = Math.max(0, Math.min(1, (0.14 - starDist) / 0.14));
+                        const tintSeed = hash21(cellX + 19.7, cellY + 73.1);
+                        let starColor = vec3(255, 255, 255);
+
+                        if (tintSeed > 0.992) {
+                            starColor = vec3(255, 148, 107);
+                        } else if (tintSeed > 0.94) {
+                            starColor = vec3(255, 230, 158);
+                        }
+
+                        color = add(color, mul(starColor, glow * (0.8 + 1.35 * hash21(cellX + 101.3, cellY + 7.7))));
+                    }
+                }
+            }
+
+            const secondaryUvX = u * 1200;
+            const secondaryUvY = v * 600;
+            const secondaryBaseX = Math.floor(secondaryUvX);
+            const secondaryBaseY = Math.floor(secondaryUvY);
+
+            for (let oy = -1; oy <= 1; oy++) {
+                for (let ox = -1; ox <= 1; ox++) {
+                    const cellX = secondaryBaseX + ox;
+                    const cellY = secondaryBaseY + oy;
+                    const localX = secondaryUvX - cellX - 0.5;
+                    const localY = secondaryUvY - cellY - 0.5;
+                    const secondarySeed = hash21(cellX + 211, cellY + 503);
+
+                    if (secondarySeed > 1 - background.stars.densitySecondary) {
+                        const offsetX = (hash21(cellX + 5.2, cellY + 91.7) - 0.5) * 0.5;
+                        const offsetY = (hash21(cellX + 29.6, cellY + 13.4) - 0.5) * 0.5;
+                        const starDist = Math.hypot(localX - offsetX, localY - offsetY);
+                        const glow = Math.max(0, Math.min(1, (0.06 - starDist) / 0.06));
+                        color = add(color, mul(vec3(255, 255, 255), glow * 0.4));
+                    }
+                }
+            }
+
+            pixels[i + 0] = Math.min(255, Math.round(color.x));
+            pixels[i + 1] = Math.min(255, Math.round(color.y));
+            pixels[i + 2] = Math.min(255, Math.round(color.z));
             pixels[i + 3] = 255;
         }
     }
@@ -656,6 +739,7 @@ const traceGeodesic = (
 
             const reflectedDirection = reflect(currentDirection, objectHit.normal);
             const reflectedWorldObjects = {
+                background: worldObjects.background,
                 blackhole: worldObjects.blackhole,
                 disc: worldObjects.disc,
                 grid: worldObjects.grid,
@@ -752,7 +836,7 @@ export function cpuPipeline(
     wc: WorldConfig,
     runGeodesic: boolean,
 ): void {
-    cpuRenderRadientBG(image, wc);
+    cpuRenderBackground(image, worldObjects, wc);
     cpuRenderGravityGrid(image, camera, worldObjects, wc);
     cpuRenderRayTracing(ctx, image, camera, worldObjects, wc, runGeodesic);
     ctx.putImageData(image, 0, 0);

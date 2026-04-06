@@ -1,7 +1,9 @@
 import gpuPipelineShaderSource from "./gpuPipeline.wgsl";
-import { cameraForward, cameraRight, cameraUp, dot, handleCameraKeyArrows, handleCameraMouseDrag, handleCameraWheelZoom, orbitCamera, rgb, sub, vec3 } from "./common";
+import { cameraForward, cameraRight, cameraUp, orbitCamera, rgb, vec3 } from "./common";
 import { cpuPipeline } from "./cpuPipeline";
-import type { BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjects } from "./types";
+import { gpuGridVertices } from "./gpuGrid";
+import { handleCameraKeyArrows, handleCameraMouseDrag, handleCameraWheelZoom } from "./input";
+import type { BackgroundMode, BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjects } from "./types";
 
 const canvasElement = document.getElementById("blackhole-canvas");
 
@@ -30,7 +32,7 @@ const SAGITTARIUS_A_MASS = worldConf.sagittariusAMass;
 const WORLD_CENTER = worldConf.worldCenter;
 const SCHWARZSCHILD_RADIUS = 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2);
 const EVENT_HORIZON_RADIUS = SCHWARZSCHILD_RADIUS;
-const CAMERA_RADIUS = 7 * SCHWARZSCHILD_RADIUS;
+const CAMERA_RADIUS = 8 * SCHWARZSCHILD_RADIUS;
 
 const blackHole = {
     pos: WORLD_CENTER,
@@ -48,7 +50,7 @@ const camera = {
     radius: CAMERA_RADIUS,
     yaw: 0,
     pitch: 0,
-    focalLength: 600,
+    focalLength: 700,
 } satisfies Camera;
 
 const disc = {
@@ -73,7 +75,26 @@ const grid = {
     lineColor: rgb(255, 255, 255),
 } satisfies Grid;
 
+const background = {
+    mode: "stars",
+    stars: {
+        densityPrimary: 0.023,
+        densitySecondary: 0.011,
+        baseColor: rgb(3, 4, 8),
+    },
+    gradient: {
+        topLeft: rgb(255, 48, 48),
+        topRight: rgb(255, 220, 0),
+        bottomLeft: rgb(24, 12, 120),
+        bottomRight: rgb(160, 0, 255),
+    },
+    empty: {
+        color: rgb(0, 0, 0),
+    },
+} satisfies renderObjects["background"];
+
 const worldObjects: renderObjects = {
+    background,
     blackhole: blackHole,
     disc,
     grid,
@@ -102,11 +123,16 @@ const worldObjects: renderObjects = {
     ],
 };
 
-const runtimeFlags = globalThis as typeof globalThis & { runGeodesic?: boolean; renderDisc?: boolean };
+const runtimeFlags = globalThis as typeof globalThis & {
+    runGeodesic?: boolean;
+    renderDisc?: boolean;
+    backgroundMode?: string;
+};
 runtimeFlags.runGeodesic = runtimeFlags.runGeodesic ?? false;
 runtimeFlags.renderDisc = runtimeFlags.renderDisc ?? true;
+runtimeFlags.backgroundMode = runtimeFlags.backgroundMode ?? worldObjects.background.mode;
 
-const gpuSceneData = new Float32Array(12 * 4);
+const gpuSceneData = new Float32Array(19 * 4);
 const GPU_SPHERE_FLOATS = 8;
 
 const fpsOverlay = document.createElement("div");
@@ -138,105 +164,17 @@ const reportFrame = (backend: string): void => {
     }
 };
 
-const gridVertexY = (
-    localX: number,
-    localZ: number,
-    baseY: number,
-    maxDrop: number,
-    halfSize: number,
-): number => {
-    const radialDist = Math.sqrt(localX ** 2 + localZ ** 2);
-    const edgeT = Math.max(0, 1 - radialDist / halfSize);
-    const strength = (Math.exp(4 * edgeT) - 1) / (Math.exp(4) - 1);
-    return baseY - maxDrop * strength;
+const gpuBackgroundModeValue = (mode: string | undefined): number => {
+    if (mode === "empty") return 0;
+    if (mode === "gradient") return 1;
+    return 2;
 };
 
-const projectGridPointToClip = (
-    point: { x: number; y: number; z: number },
-    cameraPos: { x: number; y: number; z: number },
-    forward: { x: number; y: number; z: number },
-    right: { x: number; y: number; z: number },
-    up: { x: number; y: number; z: number },
-): { x: number; y: number } | null => {
-    const relative = sub(point, cameraPos);
-    const depth = dot(relative, forward);
-
-    if (depth <= 0) return null;
-
-    const screenX = SCREEN_WIDTH * 0.5 + camera.focalLength * dot(relative, right) / depth;
-    const screenY = SCREEN_HEIGHT * 0.5 - camera.focalLength * dot(relative, up) / depth;
-
-    return {
-        x: screenX / SCREEN_WIDTH * 2 - 1,
-        y: 1 - screenY / SCREEN_HEIGHT * 2,
-    };
-};
-
-const gpuGridVertices = (): Float32Array => {
-    const grid = worldObjects.grid;
-    const baseY = grid.pos.y;
-    const halfSize = grid.halfSize;
-    const cellSize = grid.cellSize;
-    const maxDrop = grid.maxDrop;
-    const gridSteps = Math.round((2 * halfSize) / cellSize);
-
-    const cameraPos = orbitCamera(camera);
-    const forward = cameraForward(cameraPos, camera);
-    const right = cameraRight(forward);
-    const up = cameraUp(forward, right);
-    const projected: ({ x: number; y: number } | null)[][] = [];
-    const worldGrid: ({ x: number; y: number; z: number })[][] = [];
-    const lineVertices: number[] = [];
-
-    for (let z = 0; z <= gridSteps; z++) {
-        const row: ({ x: number; y: number } | null)[] = [];
-        const worldRow: ({ x: number; y: number; z: number })[] = [];
-        for (let x = 0; x <= gridSteps; x++) {
-            const localX = -halfSize + x * cellSize;
-            const localZ = -halfSize + z * cellSize;
-            const point = vec3(
-                grid.pos.x + localX,
-                gridVertexY(localX, localZ, baseY, maxDrop, halfSize),
-                grid.pos.z + localZ,
-            );
-
-            worldRow.push(point);
-            row.push(projectGridPointToClip(point, cameraPos, forward, right, up));
-        }
-        projected.push(row);
-        worldGrid.push(worldRow);
+const runtimeBackgroundMode = (mode: string | undefined, fallback: BackgroundMode): BackgroundMode => {
+    if (mode === "empty" || mode === "gradient" || mode === "stars") {
+        return mode;
     }
-
-    for (let z = 0; z <= gridSteps; z++) {
-        const row = projected[z];
-        const nextRow = projected[z + 1];
-        if (row == null) continue;
-
-        for (let x = 0; x <= gridSteps; x++) {
-            const current = row[x];
-            const currentWorld = worldGrid[z]?.[x];
-            if (current == null) continue;
-            if (currentWorld == null) continue;
-
-            if (x < gridSteps) {
-                const horizontal = row[x + 1];
-                const horizontalWorld = worldGrid[z]?.[x + 1];
-                if (horizontal != null && horizontalWorld != null) {
-                    lineVertices.push(current.x, current.y, horizontal.x, horizontal.y);
-                }
-            }
-
-            if (z < gridSteps && nextRow != null) {
-                const vertical = nextRow[x];
-                const verticalWorld = worldGrid[z + 1]?.[x];
-                if (vertical != null && verticalWorld != null) {
-                    lineVertices.push(current.x, current.y, vertical.x, vertical.y);
-                }
-            }
-        }
-    }
-
-    return new Float32Array(lineVertices);
+    return fallback;
 };
 
 const mouseDrag: MouseDrag = {
@@ -283,9 +221,11 @@ const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
     console.log("CPU geodesic raytracing is OFF by default.");
     console.log("Run `runGeodesic = true` in the console to enable it.");
     console.log("Run `renderDisc = false` in the console to hide the disc.");
+    console.log('Run `backgroundMode = "gradient"` or `backgroundMode = "empty"` in the console to switch the background.');
 
     window.setInterval(() => {
         worldObjects.disc.visible = runtimeFlags.renderDisc ?? true;
+        worldObjects.background.mode = runtimeBackgroundMode(runtimeFlags.backgroundMode, worldObjects.background.mode);
         cpuPipeline(ctx, image, camera, worldObjects, worldConf, runtimeFlags.runGeodesic ?? false);
         //console.log("Completed CPU render cycle.");
         reportFrame(runtimeFlags.runGeodesic ?? false ? "CPU geodesic" : "CPU");
@@ -431,12 +371,13 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
 
         const frame = (): void => {
             worldObjects.disc.visible = runtimeFlags.renderDisc ?? true;
+            worldObjects.background.mode = runtimeBackgroundMode(runtimeFlags.backgroundMode, worldObjects.background.mode);
             const cameraPos = orbitCamera(camera);
             const forward = cameraForward(cameraPos, camera);
             const right = cameraRight(forward);
             const up = cameraUp(forward, right);
             const sphereData = new Float32Array(Math.max(worldObjects.spheres.length * GPU_SPHERE_FLOATS, 4));
-            const gridVertices = gpuGridVertices();
+            const gridVertices = gpuGridVertices(camera, worldObjects, SCREEN_WIDTH, SCREEN_HEIGHT);
 
             for (let sphereIndex = 0; sphereIndex < worldObjects.spheres.length; sphereIndex++) {
                 const sphere = worldObjects.spheres[sphereIndex];
@@ -519,6 +460,48 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 worldObjects.grid.lineColor.b / 255,
                 0,
             ], 44);
+            gpuSceneData.set([
+                gpuBackgroundModeValue(worldObjects.background.mode),
+                worldObjects.background.stars.densityPrimary,
+                worldObjects.background.stars.densitySecondary,
+                0,
+            ], 48);
+            gpuSceneData.set([
+                worldObjects.background.stars.baseColor.r / 255,
+                worldObjects.background.stars.baseColor.g / 255,
+                worldObjects.background.stars.baseColor.b / 255,
+                0,
+            ], 52);
+            gpuSceneData.set([
+                worldObjects.background.empty.color.r / 255,
+                worldObjects.background.empty.color.g / 255,
+                worldObjects.background.empty.color.b / 255,
+                0,
+            ], 56);
+            gpuSceneData.set([
+                worldObjects.background.gradient.topLeft.r / 255,
+                worldObjects.background.gradient.topLeft.g / 255,
+                worldObjects.background.gradient.topLeft.b / 255,
+                0,
+            ], 60);
+            gpuSceneData.set([
+                worldObjects.background.gradient.topRight.r / 255,
+                worldObjects.background.gradient.topRight.g / 255,
+                worldObjects.background.gradient.topRight.b / 255,
+                0,
+            ], 64);
+            gpuSceneData.set([
+                worldObjects.background.gradient.bottomLeft.r / 255,
+                worldObjects.background.gradient.bottomLeft.g / 255,
+                worldObjects.background.gradient.bottomLeft.b / 255,
+                0,
+            ], 68);
+            gpuSceneData.set([
+                worldObjects.background.gradient.bottomRight.r / 255,
+                worldObjects.background.gradient.bottomRight.g / 255,
+                worldObjects.background.gradient.bottomRight.b / 255,
+                0,
+            ], 72);
 
             device.queue.writeBuffer(uniformBuffer, 0, gpuSceneData);
             device.queue.writeBuffer(sphereBuffer, 0, sphereData);
@@ -560,6 +543,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
         };
 
         console.log("WebGPU renderer active. GPU goes brbrbrbr....");
+        console.log('GPU background defaults to stars. Run `backgroundMode = "gradient"` or `backgroundMode = "empty"` in the console to switch it.');
         //console.log("Completed GPU render cycle.");
         requestAnimationFrame(frame);
         return true;

@@ -45,9 +45,36 @@ export type Grid = {
     lineColor: RGB;
 };
 
+export type BackgroundMode = "stars" | "gradient" | "empty";
+
+export type StarsBackground = {
+    densityPrimary: number;
+    densitySecondary: number;
+    baseColor: RGB;
+};
+
+export type GradientBackground = {
+    topLeft: RGB;
+    topRight: RGB;
+    bottomLeft: RGB;
+    bottomRight: RGB;
+};
+
+export type EmptyBackground = {
+    color: RGB;
+};
+
+export type Background = {
+    mode: BackgroundMode;
+    stars: StarsBackground;
+    gradient: GradientBackground;
+    empty: EmptyBackground;
+};
+
 export type RenderOBJ = Sphere | BlackHole;
 
 export type renderObjects = {
+    background: Background;
     blackhole: BlackHole;
     disc: Disc;
     grid: Grid;
