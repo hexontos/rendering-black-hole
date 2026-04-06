@@ -1,4 +1,4 @@
-import computeShaderSource from "./compute.wgsl";
+import gpuPipelineShaderSource from "./gpuPipeline.wgsl";
 import { cameraForward, cameraRight, cameraUp, dot, handleCameraKeyArrows, handleCameraMouseDrag, handleCameraWheelZoom, orbitCamera, rgb, sub, vec3 } from "./common";
 import { cpuPipeline } from "./cpuPipeline";
 import type { BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjects } from "./types";
@@ -312,7 +312,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
         });
 
         const shader = device.createShaderModule({
-            code: computeShaderSource,
+            code: gpuPipelineShaderSource,
         });
 
         const uniformBuffer = device.createBuffer({
