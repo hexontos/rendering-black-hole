@@ -37,11 +37,20 @@ export type Disc = {
     radialBoost: RGB;
 };
 
+export type Grid = {
+    pos: Vector3;
+    halfSize: number;
+    cellSize: number;
+    maxDrop: number;
+    lineColor: RGB;
+};
+
 export type RenderOBJ = Sphere | BlackHole;
 
 export type renderObjects = {
     blackhole: BlackHole;
     disc: Disc;
+    grid: Grid;
     spheres: Sphere[];
 };
 

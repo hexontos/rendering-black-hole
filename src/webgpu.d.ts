@@ -15,6 +15,18 @@ declare interface GPUDevice {
     queue: GPUQueue;
     createShaderModule(descriptor: { code: string }): GPUShaderModule;
     createBuffer(descriptor: { size: number; usage: number }): GPUBuffer;
+    createBindGroupLayout(descriptor: {
+        entries: Array<{
+            binding: number;
+            visibility: number;
+            buffer?: {
+                type?: "uniform" | "storage" | "read-only-storage";
+            };
+        }>;
+    }): GPUBindGroupLayout;
+    createPipelineLayout(descriptor: {
+        bindGroupLayouts: GPUBindGroupLayout[];
+    }): GPUPipelineLayout;
     createRenderPipeline(descriptor: {
         layout: "auto" | GPUPipelineLayout;
         vertex: {
@@ -98,4 +110,10 @@ declare const GPUBufferUsage: {
     readonly COPY_DST: number;
     readonly STORAGE: number;
     readonly VERTEX: number;
+};
+
+declare const GPUShaderStage: {
+    readonly VERTEX: number;
+    readonly FRAGMENT: number;
+    readonly COMPUTE: number;
 };

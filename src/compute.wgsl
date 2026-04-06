@@ -10,6 +10,7 @@ struct SceneUniforms {
     discNearColor: vec4f,
     discFarColor: vec4f,
     discRadialBoost: vec4f,
+    gridLineColor: vec4f,
 };
 
 struct Sphere {
@@ -415,5 +416,5 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
 
 @fragment
 fn gridFsMain() -> @location(0) vec4f {
-    return vec4f(1.0, 1.0, 1.0, 1.0);
+    return vec4f(scene.gridLineColor.xyz, 1.0);
 }

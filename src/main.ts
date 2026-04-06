@@ -1,7 +1,7 @@
 import computeShaderSource from "./compute.wgsl";
 import { cameraForward, cameraRight, cameraUp, dot, handleCameraKeyArrows, handleCameraMouseDrag, handleCameraWheelZoom, orbitCamera, rgb, sub, vec3 } from "./common";
 import { cpuPipeline } from "./cpuPipeline";
-import type { BlackHole, Camera, Disc, MouseDrag, WorldConfig, renderObjects } from "./types";
+import type { BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjects } from "./types";
 
 const canvasElement = document.getElementById("blackhole-canvas");
 
@@ -61,23 +61,43 @@ const disc = {
     radialBoost: rgb(28, 6, 0),
 } satisfies Disc;
 
+const grid = {
+    pos: vec3(
+        blackHole.pos.x,
+        blackHole.pos.y - 2.4 * SCHWARZSCHILD_RADIUS,
+        blackHole.pos.z,
+    ),
+    halfSize: 3.5 * SCHWARZSCHILD_RADIUS,
+    cellSize: 0.35 * SCHWARZSCHILD_RADIUS,
+    maxDrop: 2.5 * SCHWARZSCHILD_RADIUS,
+    lineColor: rgb(255, 255, 255),
+} satisfies Grid;
+
 const worldObjects: renderObjects = {
     blackhole: blackHole,
     disc,
+    grid,
     spheres: [
         {
-            pos: vec3(-4.5 * SCHWARZSCHILD_RADIUS, 0, 4*SCHWARZSCHILD_RADIUS),
+            pos: vec3(-6.5 * SCHWARZSCHILD_RADIUS, 0, 4*SCHWARZSCHILD_RADIUS),
             radius: 1.2 * SCHWARZSCHILD_RADIUS,
             emission: rgb(196, 0, 0),
             reflectivity: rgb(0.25, 1, 0.76), // normalized 0..1 per channel
             roughness: 3,
         },
         {
-            pos: vec3(10.5 * SCHWARZSCHILD_RADIUS, 0, 3*SCHWARZSCHILD_RADIUS),
-            radius: 0.8 * SCHWARZSCHILD_RADIUS,
+            pos: vec3(-10.5 * SCHWARZSCHILD_RADIUS, 0, 7*SCHWARZSCHILD_RADIUS),
+            radius: 1.7 * SCHWARZSCHILD_RADIUS,
             emission: rgb(115, 0, 255),
             reflectivity: rgb(0, 0, 0),
             roughness: 0,
+        },
+        {
+            pos: vec3(-9 * SCHWARZSCHILD_RADIUS, 0, -14*SCHWARZSCHILD_RADIUS),
+            radius: 1.7 * SCHWARZSCHILD_RADIUS,
+            emission: rgb(232, 213, 255),
+            reflectivity: rgb(1, 0, 1),
+            roughness: 10,
         },
     ],
 };
@@ -86,7 +106,7 @@ const runtimeFlags = globalThis as typeof globalThis & { runGeodesic?: boolean; 
 runtimeFlags.runGeodesic = runtimeFlags.runGeodesic ?? false;
 runtimeFlags.renderDisc = runtimeFlags.renderDisc ?? true;
 
-const gpuSceneData = new Float32Array(11 * 4);
+const gpuSceneData = new Float32Array(12 * 4);
 const GPU_SPHERE_FLOATS = 8;
 
 const fpsOverlay = document.createElement("div");
@@ -153,10 +173,11 @@ const projectGridPointToClip = (
 };
 
 const gpuGridVertices = (): Float32Array => {
-    const baseY = blackHole.pos.y - 2.2 * SCHWARZSCHILD_RADIUS;
-    const halfSize = 3.5 * SCHWARZSCHILD_RADIUS;
-    const cellSize = 0.35 * SCHWARZSCHILD_RADIUS;
-    const maxDrop = 1.8 * SCHWARZSCHILD_RADIUS;
+    const grid = worldObjects.grid;
+    const baseY = grid.pos.y;
+    const halfSize = grid.halfSize;
+    const cellSize = grid.cellSize;
+    const maxDrop = grid.maxDrop;
     const gridSteps = Math.round((2 * halfSize) / cellSize);
 
     const cameraPos = orbitCamera(camera);
@@ -174,9 +195,9 @@ const gpuGridVertices = (): Float32Array => {
             const localX = -halfSize + x * cellSize;
             const localZ = -halfSize + z * cellSize;
             const point = vec3(
-                blackHole.pos.x + localX,
+                grid.pos.x + localX,
                 gridVertexY(localX, localZ, baseY, maxDrop, halfSize),
-                blackHole.pos.z + localZ,
+                grid.pos.z + localZ,
             );
 
             worldRow.push(point);
@@ -307,8 +328,31 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
 
+        const sceneBindGroupLayout = device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: {
+                        type: "uniform",
+                    },
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: {
+                        type: "read-only-storage",
+                    },
+                },
+            ],
+        });
+
+        const scenePipelineLayout = device.createPipelineLayout({
+            bindGroupLayouts: [sceneBindGroupLayout],
+        });
+
         const backgroundPipeline = device.createRenderPipeline({
-            layout: "auto",
+            layout: scenePipelineLayout,
             vertex: {
                 module: shader,
                 entryPoint: "vsMain",
@@ -324,7 +368,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
         });
 
         const pipeline = device.createRenderPipeline({
-            layout: "auto",
+            layout: scenePipelineLayout,
             vertex: {
                 module: shader,
                 entryPoint: "vsMain",
@@ -340,7 +384,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
         });
 
         const gridPipeline = device.createRenderPipeline({
-            layout: "auto",
+            layout: scenePipelineLayout,
             vertex: {
                 module: shader,
                 entryPoint: "gridVsMain",
@@ -368,7 +412,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
         });
 
         let bindGroup = device.createBindGroup({
-            layout: pipeline.getBindGroupLayout(0),
+            layout: sceneBindGroupLayout,
             entries: [
                 {
                     binding: 0,
@@ -413,7 +457,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
                 });
                 bindGroup = device.createBindGroup({
-                    layout: pipeline.getBindGroupLayout(0),
+                    layout: sceneBindGroupLayout,
                     entries: [
                         {
                             binding: 0,
@@ -469,6 +513,12 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 worldObjects.disc.radialBoost.b / 255,
                 0,
             ], 40);
+            gpuSceneData.set([
+                worldObjects.grid.lineColor.r / 255,
+                worldObjects.grid.lineColor.g / 255,
+                worldObjects.grid.lineColor.b / 255,
+                0,
+            ], 44);
 
             device.queue.writeBuffer(uniformBuffer, 0, gpuSceneData);
             device.queue.writeBuffer(sphereBuffer, 0, sphereData);
@@ -491,9 +541,11 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             });
 
             pass.setPipeline(backgroundPipeline);
+            pass.setBindGroup(0, bindGroup);
             pass.draw(3);
             if (gridVertices.length > 0) {
                 pass.setPipeline(gridPipeline);
+                pass.setBindGroup(0, bindGroup);
                 pass.setVertexBuffer(0, gridVertexBuffer);
                 pass.draw(gridVertices.length / 2);
             }

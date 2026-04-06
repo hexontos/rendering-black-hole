@@ -279,6 +279,7 @@ const trace = (origin: Vector3, direction: Vector3, worldObjects: renderObjects,
             {
                 blackhole: worldObjects.blackhole,
                 disc: worldObjects.disc,
+                grid: worldObjects.grid,
                 spheres: worldObjects.spheres.filter((o) => o !== hit.object),
             },
             steps - 1,
@@ -300,15 +301,17 @@ const trace = (origin: Vector3, direction: Vector3, worldObjects: renderObjects,
 const cpuRenderGravityGrid = (
     image: ImageData,
     camera: Camera,
+    worldObjects: renderObjects,
     wc: WorldConfig,
 ): void => {
     const blackhole = camera.target;
-    const baseY = blackhole.pos.y - 0.7 * blackhole.schwarzschildRadius;
-    const halfSize = 3.5 * blackhole.schwarzschildRadius;
-    const cellSize = 0.35 * blackhole.schwarzschildRadius;
-    const maxDrop = 1.8 * blackhole.schwarzschildRadius;
+    const grid = worldObjects.grid;
+    const baseY = grid.pos.y;
+    const halfSize = grid.halfSize;
+    const cellSize = grid.cellSize;
+    const maxDrop = grid.maxDrop;
     const gridSteps = Math.round((2 * halfSize) / cellSize);
-    const lineColor = vec3(255, 255, 255);
+    const lineColor = vec3(grid.lineColor.r, grid.lineColor.g, grid.lineColor.b);
 
     const cameraPos = orbitCamera(camera);
     const forward = cameraForward(cameraPos, camera);
@@ -323,9 +326,9 @@ const cpuRenderGravityGrid = (
             const localX = -halfSize + x * cellSize;
             const localZ = -halfSize + z * cellSize;
             const point = vec3(
-                blackhole.pos.x + localX,
+                grid.pos.x + localX,
                 gridVertexY(localX, localZ, baseY, maxDrop, halfSize),
-                blackhole.pos.z + localZ,
+                grid.pos.z + localZ,
             );
 
             row.push(projectPoint(point, cameraPos, forward, right, up, wc, camera.focalLength));
@@ -655,6 +658,7 @@ const traceGeodesic = (
             const reflectedWorldObjects = {
                 blackhole: worldObjects.blackhole,
                 disc: worldObjects.disc,
+                grid: worldObjects.grid,
                 spheres: worldObjects.spheres.filter((object) => object !== objectHit.object),
             } satisfies renderObjects;
             const reflectedColor = traceGeodesic(objectHit.point, reflectedDirection, reflectedWorldObjects, steps - 1, colorOrigin);
@@ -749,7 +753,7 @@ export function cpuPipeline(
     runGeodesic: boolean,
 ): void {
     cpuRenderRadientBG(image, wc);
-    cpuRenderGravityGrid(image, camera, wc);
+    cpuRenderGravityGrid(image, camera, worldObjects, wc);
     cpuRenderRayTracing(ctx, image, camera, worldObjects, wc, runGeodesic);
     ctx.putImageData(image, 0, 0);
 }
