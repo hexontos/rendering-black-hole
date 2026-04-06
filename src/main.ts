@@ -34,7 +34,7 @@ type BlackHole = Sphere & {
 type RenderOBJ = Sphere | BlackHole;
 
 type renderObjects = {
-    b: BlackHole;
+    blackhole: BlackHole;
     spheres: Sphere[];
 };
 
@@ -42,11 +42,13 @@ type Ray = {
     // cartesian state.
     pos: Vector3;
     dir: Vector3;
-    // polar state
+    // spherical state
     r: number;
+    theta: number;
     phi: number;
     // seed velocities
     dr: number;
+    dtheta: number;
     dphi: number;
 };
 
@@ -55,6 +57,8 @@ type GeodesicRay = Ray & {
     E: number;
     L: number;
 };
+
+type SixStates = [number, number, number, number, number, number];
 
 type Camera = {
     target: BlackHole;
@@ -167,28 +171,51 @@ const rgb = (r: number, g: number, b: number) => ({ r, g, b } satisfies RGB);
 
 const vec3 = (x: number, y: number, z: number) => ({ x, y, z } satisfies Vector3);
 
+const sphericalBasis = (theta: number, phi: number): { eR: Vector3; eTheta: Vector3; ePhi: Vector3 } => {
+    const sinTheta = Math.sin(theta);
+    const cosTheta = Math.cos(theta);
+    const sinPhi = Math.sin(phi);
+    const cosPhi = Math.cos(phi);
+
+    return {
+        eR: vec3(sinTheta * cosPhi, cosTheta, sinTheta * sinPhi),
+        eTheta: vec3(cosTheta * cosPhi, -sinTheta, cosTheta * sinPhi),
+        ePhi: vec3(-sinPhi, 0, cosPhi),
+    };
+};
+
 const ray = (pos: Vector3, dir: Vector3): Ray => {
-    const r = Math.hypot(pos.x, pos.y);
-    const phi = Math.atan2(pos.y, pos.x);
+    const r = mag(pos);
     if (r === 0) throw new Error("Cannot initialize a ray at the origin....");
-    const dr = dir.x * Math.cos(phi) + dir.y * Math.sin(phi);
-    const dphi = (-dir.x * Math.sin(phi) + dir.y * Math.cos(phi)) / r;
+    const theta = Math.acos(Math.max(-1, Math.min(1, pos.y / r)));
+    const phi = Math.atan2(pos.z, pos.x);
+    const sinTheta = Math.max(Math.sin(theta), 1e-9);
+    const { eR, eTheta, ePhi } = sphericalBasis(theta, phi);
+    const dr = dot(dir, eR);
+    const dtheta = dot(dir, eTheta) / r;
+    const dphi = dot(dir, ePhi) / (r * sinTheta);
 
     return {
         pos,
         dir,
         r,
+        theta,
         phi,
         dr,
+        dtheta,
         dphi,
     };
 };
 
 const gRay = (ray: Ray, blackHole: BlackHole): GeodesicRay => {
-    const L = ray.r ** 2 * ray.dphi;
+    const sinTheta = Math.max(Math.sin(ray.theta), 1e-9);
+    const L = ray.r ** 2 * Math.sqrt(ray.dtheta ** 2 + sinTheta ** 2 * ray.dphi ** 2);
     const f = 1.0 - blackHole.schwarzschildRadius / ray.r;
-    const dt_dλ = Math.sqrt((ray.dr ** 2) / (f ** 2) + ((ray.r ** 2) * (ray.dphi ** 2)) / f);
-    const E = f * dt_dλ;
+    const dtDλ = Math.sqrt(
+        (ray.dr ** 2) / (f ** 2)
+        + ((ray.r ** 2) * (ray.dtheta ** 2 + sinTheta ** 2 * ray.dphi ** 2)) / f,
+    );
+    const E = f * dtDλ;
 
     return {
         ...ray,
@@ -390,7 +417,7 @@ const intersectDisc = (origin: Vector3, direction: Vector3): PLANE_INTERSECTION 
     if (discPlane.collided) {
         const local = sub(discPlane.point, blackHole.pos);
         const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
-        const innerRadius = 1.5 * SCHWARZSCHILD_RADIUS; // photon sphere for Schwarzschild black hole.
+        const innerRadius = 1.5 * SCHWARZSCHILD_RADIUS;
         const outerRadius = 2.6 * SCHWARZSCHILD_RADIUS;
 
         if (radialDist >= innerRadius && radialDist <= outerRadius) {
@@ -623,6 +650,286 @@ const cpuRenderRadientBG = (image: ImageData, wc: WorldConfig): void => {
     }
 };
 
+const runtimeFlags = globalThis as typeof globalThis & { runGeodesic?: boolean };
+
+const computeGeodesicDerivatives = (
+    state: { r: number; theta: number; dr: number; dtheta: number; dphi: number; E: number },
+    schwarzschildRadius: SchwarzschildRadius,
+    rhs: SixStates,
+): void => {
+    const r = state.r;
+    const theta = state.theta;
+    const dr = state.dr;
+    const dtheta = state.dtheta;
+    const dphi = state.dphi;
+    const E = state.E;
+
+    const f = 1.0 - schwarzschildRadius / r;
+    const dtDλ = E / f;
+    const sinTheta = Math.sin(theta);
+    const cosTheta = Math.cos(theta);
+    const sinThetaSafe = Math.abs(sinTheta) < 1e-9 ? (sinTheta >= 0 ? 1e-9 : -1e-9) : sinTheta;
+
+    rhs[0] = dr;
+    rhs[1] = dtheta;
+    rhs[2] = dphi;
+    rhs[3] = -(schwarzschildRadius / (2 * r ** 2)) * f * (dtDλ ** 2)
+        + (schwarzschildRadius / (2 * r ** 2 * f)) * (dr ** 2)
+        + r * (dtheta ** 2 + sinTheta * sinTheta * dphi ** 2);
+    rhs[4] = -(2.0 / r) * dr * dtheta
+        + sinTheta * cosTheta * dphi ** 2;
+    rhs[5] = -(2.0 / r) * dr * dphi
+        - 2.0 * cosTheta / sinThetaSafe * dtheta * dphi;
+};
+
+const fourthOrderRungeKutta = (ray: GeodesicRay, dλ: number, schwarzschildRadius: SchwarzschildRadius): void => {
+
+    const y: SixStates = [ray.r, ray.theta, ray.phi, ray.dr, ray.dtheta, ray.dphi];
+    const k1: SixStates = [0, 0, 0, 0, 0, 0];
+    const k2: SixStates = [0, 0, 0, 0, 0, 0];
+    const k3: SixStates = [0, 0, 0, 0, 0, 0];
+    const k4: SixStates = [0, 0, 0, 0, 0, 0];
+    const temp: SixStates = [0, 0, 0, 0, 0, 0];
+
+    computeGeodesicDerivatives({ r: y[0], theta: y[1], dr: y[3], dtheta: y[4], dphi: y[5], E: ray.E }, schwarzschildRadius, k1);
+
+    temp[0] = y[0] + k1[0] * dλ * 0.5;
+    temp[1] = y[1] + k1[1] * dλ * 0.5;
+    temp[2] = y[2] + k1[2] * dλ * 0.5;
+    temp[3] = y[3] + k1[3] * dλ * 0.5;
+    temp[4] = y[4] + k1[4] * dλ * 0.5;
+    temp[5] = y[5] + k1[5] * dλ * 0.5;
+    computeGeodesicDerivatives({ r: temp[0], theta: temp[1], dr: temp[3], dtheta: temp[4], dphi: temp[5], E: ray.E }, schwarzschildRadius, k2);
+
+    temp[0] = y[0] + k2[0] * dλ * 0.5;
+    temp[1] = y[1] + k2[1] * dλ * 0.5;
+    temp[2] = y[2] + k2[2] * dλ * 0.5;
+    temp[3] = y[3] + k2[3] * dλ * 0.5;
+    temp[4] = y[4] + k2[4] * dλ * 0.5;
+    temp[5] = y[5] + k2[5] * dλ * 0.5;
+    computeGeodesicDerivatives({ r: temp[0], theta: temp[1], dr: temp[3], dtheta: temp[4], dphi: temp[5], E: ray.E }, schwarzschildRadius, k3);
+
+    temp[0] = y[0] + k3[0] * dλ;
+    temp[1] = y[1] + k3[1] * dλ;
+    temp[2] = y[2] + k3[2] * dλ;
+    temp[3] = y[3] + k3[3] * dλ;
+    temp[4] = y[4] + k3[4] * dλ;
+    temp[5] = y[5] + k3[5] * dλ;
+    computeGeodesicDerivatives({ r: temp[0], theta: temp[1], dr: temp[3], dtheta: temp[4], dphi: temp[5], E: ray.E }, schwarzschildRadius, k4);
+
+    ray.r += (dλ / 6.0) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]);
+    ray.theta += (dλ / 6.0) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
+    ray.phi += (dλ / 6.0) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]);
+    ray.dr += (dλ / 6.0) * (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3]);
+    ray.dtheta += (dλ / 6.0) * (k1[4] + 2 * k2[4] + 2 * k3[4] + k4[4]);
+    ray.dphi += (dλ / 6.0) * (k1[5] + 2 * k2[5] + 2 * k3[5] + k4[5]);
+};
+
+const segmentSphereIntersection = (
+    segmentStart: Vector3,
+    segmentEnd: Vector3,
+    objects: RenderOBJ[],
+): INTERSECTION => {
+    const segment = sub(segmentEnd, segmentStart);
+    const segmentLength = mag(segment);
+
+    if (segmentLength === 0) {
+        return {
+            collided: false,
+            dist: Infinity,
+        };
+    }
+
+    const direction = mul(segment, 1 / segmentLength);
+    let minDist = Infinity;
+    let closestIntersection: Extract<INTERSECTION, { collided: true }> | undefined;
+    let closestObject: RenderOBJ | undefined;
+
+    for (const object of objects) {
+        const oc = sub(segmentStart, object.pos);
+        const b = 2 * dot(oc, direction);
+        const c = dot(oc, oc) - object.radius ** 2;
+        const discriminant = b ** 2 - 4 * c;
+
+        if (discriminant < 0) continue;
+
+        const sqrtDiscriminant = Math.sqrt(discriminant);
+        const t1 = (-b - sqrtDiscriminant) * 0.5;
+        const t2 = (-b + sqrtDiscriminant) * 0.5;
+
+        let dist = Infinity;
+        if (t1 >= 0 && t1 <= segmentLength) {
+            dist = t1;
+        } else if (t2 >= 0 && t2 <= segmentLength) {
+            dist = t2;
+        }
+
+        if (dist === Infinity || dist >= minDist) continue;
+
+        const point = add(segmentStart, mul(direction, dist));
+        let normal = normalize(sub(point, object.pos));
+        normal = normalize(add(normal, mul(vec3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5), object.roughness)));
+
+        closestIntersection = {
+            collided: true,
+            dist,
+            point,
+            normal,
+            object,
+        };
+        closestObject = object;
+        minDist = dist;
+    }
+
+    if (closestIntersection != null && closestObject != null) {
+        return {
+            collided: true,
+            dist: closestIntersection.dist,
+            point: closestIntersection.point,
+            normal: closestIntersection.normal,
+            object: closestObject,
+        };
+    }
+
+    return {
+        collided: false,
+        dist: Infinity,
+    };
+};
+
+const segmentDiscIntersection = (
+    segmentStart: Vector3,
+    segmentEnd: Vector3,
+    blackhole: BlackHole,
+): PLANE_INTERSECTION => {
+    const segment = sub(segmentEnd, segmentStart);
+
+    if (Math.abs(segment.y) < 1e-9) {
+        return {
+            collided: false,
+            dist: Infinity,
+        };
+    }
+
+    const t = (blackhole.pos.y - segmentStart.y) / segment.y;
+    if (t < 0 || t > 1) {
+        return {
+            collided: false,
+            dist: Infinity,
+        };
+    }
+
+    const point = add(segmentStart, mul(segment, t));
+    const local = sub(point, blackhole.pos);
+    const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
+    const innerRadius = 1.5 * blackhole.schwarzschildRadius;
+    const outerRadius = 2.6 * blackhole.schwarzschildRadius;
+
+    if (radialDist < innerRadius || radialDist > outerRadius) {
+        return {
+            collided: false,
+            dist: Infinity,
+        };
+    }
+
+    return {
+        collided: true,
+        dist: mag(segment) * t,
+        point,
+    };
+};
+
+const traceGeodesic = (
+    rayOrigin: Vector3,
+    rayDirection: Vector3,
+    worldObjects: renderObjects,
+    steps: number,
+    colorOrigin: Vector3 = rayOrigin,
+): Vector3 | null => {
+    const blackhole = worldObjects.blackhole;
+    const localOrigin = sub(rayOrigin, blackhole.pos);
+    const baseRay = ray(localOrigin, rayDirection);
+    const geodesicRay = gRay(baseRay, blackhole);
+
+    const dλ = 5e7; // 1e7
+    const maxGeodesicSteps = 10000;
+    const escapeRadius = 30 * blackhole.schwarzschildRadius; // 1e14
+    let previousWorldPoint = rayOrigin;
+
+    for (let stepIndex = 0; stepIndex < maxGeodesicSteps; stepIndex++) {
+        fourthOrderRungeKutta(geodesicRay, dλ, blackhole.schwarzschildRadius);
+
+        if (!Number.isFinite(geodesicRay.r) || !Number.isFinite(geodesicRay.theta) || !Number.isFinite(geodesicRay.phi) || !Number.isFinite(geodesicRay.dr) || !Number.isFinite(geodesicRay.dtheta) || !Number.isFinite(geodesicRay.dphi)) {
+            return null;
+        }
+
+        const sinTheta = Math.sin(geodesicRay.theta);
+        const cosTheta = Math.cos(geodesicRay.theta);
+        const sinPhi = Math.sin(geodesicRay.phi);
+        const cosPhi = Math.cos(geodesicRay.phi);
+        const currentWorldPoint = vec3(
+            blackhole.pos.x + geodesicRay.r * sinTheta * cosPhi,
+            blackhole.pos.y + geodesicRay.r * cosTheta,
+            blackhole.pos.z + geodesicRay.r * sinTheta * sinPhi,
+        );
+
+        const { eR, eTheta, ePhi } = sphericalBasis(geodesicRay.theta, geodesicRay.phi);
+        const currentDirection = normalize(add(
+            add(
+                mul(eR, geodesicRay.dr),
+                mul(eTheta, geodesicRay.r * geodesicRay.dtheta),
+            ),
+            mul(ePhi, geodesicRay.r * Math.max(Math.sin(geodesicRay.theta), 1e-9) * geodesicRay.dphi),
+        ));
+
+        const objectHit = segmentSphereIntersection(previousWorldPoint, currentWorldPoint, [worldObjects.blackhole, ...worldObjects.spheres]);
+        const discHit = segmentDiscIntersection(previousWorldPoint, currentWorldPoint, blackhole);
+
+        if (discHit.collided && (!objectHit.collided || discHit.dist < objectHit.dist)) {
+            return sampleDisc(colorOrigin, discHit.point);
+        }
+
+        if (objectHit.collided) {
+            if (objectHit.object === worldObjects.blackhole) {
+                return vec3(0, 0, 0);
+            }
+
+            if (steps <= 0) {
+                return vec3(objectHit.object.emission.r, objectHit.object.emission.g, objectHit.object.emission.b);
+            }
+
+            const reflectedDirection = reflect(currentDirection, objectHit.normal);
+            const reflectedWorldObjects = {
+                blackhole: worldObjects.blackhole,
+                spheres: worldObjects.spheres.filter((object) => object !== objectHit.object),
+            } satisfies renderObjects;
+            const reflectedColor = traceGeodesic(objectHit.point, reflectedDirection, reflectedWorldObjects, steps - 1, colorOrigin);
+
+            return add(
+                vec3(objectHit.object.emission.r, objectHit.object.emission.g, objectHit.object.emission.b),
+                reflectedColor == null
+                    ? vec3(0, 0, 0)
+                    : mulParts(
+                        reflectedColor,
+                        vec3(objectHit.object.reflectivity.r, objectHit.object.reflectivity.g, objectHit.object.reflectivity.b),
+                    ),
+            );
+        }
+
+        if (geodesicRay.r <= blackhole.schwarzschildRadius) {
+            return vec3(0, 0, 0);
+        }
+
+        if (geodesicRay.r >= escapeRadius && stepIndex > 8) {
+            return null;
+        }
+
+        previousWorldPoint = currentWorldPoint;
+    }
+
+    return null;
+};
+
 const toneMap = (value: number): number => 255 * (1 - Math.exp(-value * 0.02));
 const toByte = (value: number): number => Math.max(0, Math.min(255, Math.round(toneMap(value))));
 
@@ -636,7 +943,8 @@ const cpuRenderRayTracing = (
     const SCREEN_WIDTH = wc.screenWidth;
     const SCREEN_HEIGHT = wc.screenHeight;
     const pixels: ImageDataArray = image.data;
-    const samples = 4; // for computing randomness like roughness material in spheres
+    const runGeodesic = runtimeFlags.runGeodesic ?? false;
+    const samples = runGeodesic ? 1 : 4; // for computing randomness like roughness material in spheres
 
     const cameraPos = orbitCamera(camera);
     const forward = cameraForward(cameraPos, camera);
@@ -655,14 +963,15 @@ const cpuRenderRayTracing = (
             let pixel: Vector3 = vec3(0, 0, 0);
             let hitSamples = 0;
             
-            // spheres
             for (let n: number = 0; n < samples; n++) {
-                const sample = trace(rayOrigin, rayDirection, [worldObjects.b, ...worldObjects.spheres], samples);
+                const sample = runGeodesic
+                    ? traceGeodesic(rayOrigin, rayDirection, worldObjects, samples)
+                    : trace(rayOrigin, rayDirection, [worldObjects.blackhole, ...worldObjects.spheres], samples);
+
                 if (sample != null) {
                     pixel = add(pixel, sample);
                     hitSamples += 1;
                 }
-                //pixel = add(pixel, trace([0, 0, 0], rayDirection, worldObjects, 4));
             };
 
             if (hitSamples === 0) continue;
@@ -688,6 +997,7 @@ function cpuPipeline(
     cpuRenderGravityGrid(image, camera, wc);
     cpuRenderRayTracing(ctx, image, camera, worldObjects, wc);
     ctx.putImageData(image, 0, 0);
+    console.log("Successful render loop");
 }
 
 ///////////////
@@ -751,7 +1061,7 @@ const camera = {
 } satisfies Camera;
 
 const worldObjects: renderObjects = {
-    b: blackHole,
+    blackhole: blackHole,
     spheres: [
         {
             pos: vec3(-2.5 * SCHWARZSCHILD_RADIUS, 0, 0),
@@ -771,6 +1081,7 @@ const worldObjects: renderObjects = {
 };
 
 const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
+runtimeFlags.runGeodesic = runtimeFlags.runGeodesic ?? false;
 const mouseDrag: MouseDrag = {
     active: false,
     lastX: 0,
