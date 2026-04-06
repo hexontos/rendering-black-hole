@@ -270,17 +270,15 @@ fn segmentSphereIntersection(
     return Intersection(true, dist, point, normal, color, kind);
 }
 
-fn sampleDisc(origin: vec3f, point: vec3f) -> vec3f {
+fn sampleDisc(_origin: vec3f, point: vec3f) -> vec3f {
     let local = point - scene.discPos.xyz;
     let radialDist = length(vec2f(local.x, local.z));
     let innerRadius = scene.discParams.x;
     let outerRadius = scene.discParams.y;
-    let cameraAxis = normalize(vec3f(origin.x - scene.discPos.x, 0.0, origin.z - scene.discPos.z));
-    let axisCoord = dot(local, cameraAxis);
-    let axisT = clamp(0.5 - 0.5 * axisCoord / outerRadius, 0.0, 1.0);
     let radialT = clamp((radialDist - innerRadius) / (outerRadius - innerRadius), 0.0, 1.0);
-    let axisColor = lerpColor(scene.discFarColor.xyz, scene.discNearColor.xyz, axisT);
-    return clamp(axisColor + scene.discRadialBoost.xyz * radialT, vec3f(0.0), vec3f(1.0));
+    let innerT = 1.0 - radialT;
+    let radialColor = lerpColor(scene.discNearColor.xyz, scene.discFarColor.xyz, radialT);
+    return clamp(radialColor + scene.discRadialBoost.xyz * innerT, vec3f(0.0), vec3f(1.0));
 }
 
 fn segmentDiscIntersection(

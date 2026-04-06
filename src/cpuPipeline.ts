@@ -175,23 +175,21 @@ const intersectDisc = (origin: Vector3, direction: Vector3, disc: Disc): PLANE_I
     };
 };
 
-const sampleDisc = (origin: Vector3, point: Vector3, disc: Disc): Vector3 => {
+const sampleDisc = (_origin: Vector3, point: Vector3, disc: Disc): Vector3 => {
     const local = sub(point, disc.pos);
     const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
-    const cameraAxis = normalize(vec3(origin.x - disc.pos.x, 0, origin.z - disc.pos.z));
-    const axisCoord = dot(local, cameraAxis);
-    const axisT = Math.max(0, Math.min(1, 0.5 - 0.5 * axisCoord / disc.outerRadius));
     const radialT = Math.max(0, Math.min(1, (radialDist - disc.innerRadius) / (disc.outerRadius - disc.innerRadius)));
-    const axisColor = vec3(
-        disc.farColor.r + (disc.nearColor.r - disc.farColor.r) * axisT,
-        disc.farColor.g + (disc.nearColor.g - disc.farColor.g) * axisT,
-        disc.farColor.b + (disc.nearColor.b - disc.farColor.b) * axisT,
+    const innerT = 1 - radialT;
+    const radialColor = vec3(
+        disc.nearColor.r + (disc.farColor.r - disc.nearColor.r) * radialT,
+        disc.nearColor.g + (disc.farColor.g - disc.nearColor.g) * radialT,
+        disc.nearColor.b + (disc.farColor.b - disc.nearColor.b) * radialT,
     );
 
     return vec3(
-        axisColor.x + disc.radialBoost.r * radialT,
-        axisColor.y + disc.radialBoost.g * radialT,
-        axisColor.z + disc.radialBoost.b * radialT,
+        radialColor.x + disc.radialBoost.r * innerT,
+        radialColor.y + disc.radialBoost.g * innerT,
+        radialColor.z + disc.radialBoost.b * innerT,
     );
 };
 

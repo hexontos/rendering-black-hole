@@ -1,5 +1,5 @@
 import computeShaderSource from "./compute.wgsl";
-import { cameraForward, cameraRight, cameraUp, dot, handleCameraKeyArrows, handleCameraMouseDrag, orbitCamera, rgb, sub, vec3 } from "./common";
+import { cameraForward, cameraRight, cameraUp, dot, handleCameraKeyArrows, handleCameraMouseDrag, handleCameraWheelZoom, orbitCamera, rgb, sub, vec3 } from "./common";
 import { cpuPipeline } from "./cpuPipeline";
 import type { BlackHole, Camera, Disc, MouseDrag, WorldConfig, renderObjects } from "./types";
 
@@ -47,18 +47,18 @@ const camera = {
     target: blackHole,
     radius: CAMERA_RADIUS,
     yaw: 0,
-    pitch: 0.28,
+    pitch: 0,
     focalLength: 600,
 } satisfies Camera;
 
 const disc = {
     pos: blackHole.pos,
-    innerRadius: 1.5 * SCHWARZSCHILD_RADIUS,
-    outerRadius: 2.6 * SCHWARZSCHILD_RADIUS,
+    innerRadius: 1.8 * SCHWARZSCHILD_RADIUS,
+    outerRadius: 2.7 * SCHWARZSCHILD_RADIUS,
     visible: true,
-    nearColor: rgb(255, 230, 131),
-    farColor: rgb(255, 85, 0),
-    radialBoost: rgb(45, 34, 0),
+    nearColor: rgb(255, 102, 0),
+    farColor: rgb(255, 208, 18),
+    radialBoost: rgb(28, 6, 0),
 } satisfies Disc;
 
 const worldObjects: renderObjects = {
@@ -66,16 +66,16 @@ const worldObjects: renderObjects = {
     disc,
     spheres: [
         {
-            pos: vec3(-4.5 * SCHWARZSCHILD_RADIUS, 0, 0),
-            radius: 1.65 * SCHWARZSCHILD_RADIUS,
-            emission: rgb(255, 230, 140),
+            pos: vec3(-4.5 * SCHWARZSCHILD_RADIUS, 0, 4*SCHWARZSCHILD_RADIUS),
+            radius: 1.2 * SCHWARZSCHILD_RADIUS,
+            emission: rgb(196, 0, 0),
             reflectivity: rgb(0.25, 1, 0.76), // normalized 0..1 per channel
             roughness: 3,
         },
         {
-            pos: vec3(10.5 * SCHWARZSCHILD_RADIUS, 0, 0),
+            pos: vec3(10.5 * SCHWARZSCHILD_RADIUS, 0, 3*SCHWARZSCHILD_RADIUS),
             radius: 0.8 * SCHWARZSCHILD_RADIUS,
-            emission: rgb(255, 255, 0),
+            emission: rgb(115, 0, 255),
             reflectivity: rgb(0, 0, 0),
             roughness: 0,
         },
@@ -224,6 +224,9 @@ const mouseDrag: MouseDrag = {
     lastY: 0,
 };
 
+const MIN_CAMERA_RADIUS = CAMERA_RADIUS / 1.2;
+const MAX_CAMERA_RADIUS = CAMERA_RADIUS * 2;
+
 window.addEventListener("keydown", (event) => {
     handleCameraKeyArrows(event, camera);
 });
@@ -237,6 +240,10 @@ canvas.addEventListener("mousedown", (event) => {
 window.addEventListener("mousemove", (event) => {
     handleCameraMouseDrag(event, camera, mouseDrag);
 });
+
+canvas.addEventListener("wheel", (event) => {
+    handleCameraWheelZoom(event, camera, MIN_CAMERA_RADIUS, MAX_CAMERA_RADIUS);
+}, { passive: false });
 
 window.addEventListener("mouseup", () => {
     mouseDrag.active = false;

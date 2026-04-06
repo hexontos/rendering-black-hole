@@ -47,6 +47,22 @@ export const handleCameraMouseDrag = (
     camera.pitch = Math.max(-pitchLimit, Math.min(camera.pitch, pitchLimit));
 };
 
+export const handleCameraWheelZoom = (
+    event: WheelEvent,
+    camera: Camera,
+    minRadius: number,
+    maxRadius: number,
+    zoomStep: number = 1.1,
+): void => {
+    if (event.deltaY > 0) {
+        camera.radius = Math.min(camera.radius * zoomStep, maxRadius);
+    } else if (event.deltaY < 0) {
+        camera.radius = Math.max(camera.radius / zoomStep, minRadius);
+    }
+
+    event.preventDefault();
+};
+
 export const rgb = (r: number, g: number, b: number) => ({ r, g, b } satisfies RGB);
 
 export const vec3 = (x: number, y: number, z: number) => ({ x, y, z } satisfies Vector3);
