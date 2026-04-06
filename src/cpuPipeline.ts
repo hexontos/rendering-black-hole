@@ -19,6 +19,7 @@ import {
 import type {
     BlackHole,
     Camera,
+    Disc,
     GeodesicRay,
     INTERSECTION,
     PLANE_INTERSECTION,
@@ -149,16 +150,21 @@ const drawLineToImage = (
     }
 };
 
-const intersectDisc = (origin: Vector3, direction: Vector3, blackhole: BlackHole): PLANE_INTERSECTION => {
-    const discPlane = intersectPlane(origin, direction, blackhole.pos.y);
+const intersectDisc = (origin: Vector3, direction: Vector3, disc: Disc): PLANE_INTERSECTION => {
+    if (!disc.visible) {
+        return {
+            collided: false,
+            dist: Infinity,
+        };
+    }
+
+    const discPlane = intersectPlane(origin, direction, disc.pos.y);
 
     if (discPlane.collided) {
-        const local = sub(discPlane.point, blackhole.pos);
+        const local = sub(discPlane.point, disc.pos);
         const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
-        const innerRadius = 1.5 * blackhole.schwarzschildRadius;
-        const outerRadius = 2.6 * blackhole.schwarzschildRadius;
 
-        if (radialDist >= innerRadius && radialDist <= outerRadius) {
+        if (radialDist >= disc.innerRadius && radialDist <= disc.outerRadius) {
             return discPlane;
         }
     }
@@ -169,20 +175,23 @@ const intersectDisc = (origin: Vector3, direction: Vector3, blackhole: BlackHole
     };
 };
 
-const sampleDisc = (origin: Vector3, point: Vector3, blackhole: BlackHole): Vector3 => {
-    const local = sub(point, blackhole.pos);
+const sampleDisc = (origin: Vector3, point: Vector3, disc: Disc): Vector3 => {
+    const local = sub(point, disc.pos);
     const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
-    const innerRadius = 1.5 * blackhole.schwarzschildRadius;
-    const outerRadius = 2.6 * blackhole.schwarzschildRadius;
-    const cameraAxis = normalize(vec3(origin.x - blackhole.pos.x, 0, origin.z - blackhole.pos.z));
+    const cameraAxis = normalize(vec3(origin.x - disc.pos.x, 0, origin.z - disc.pos.z));
     const axisCoord = dot(local, cameraAxis);
-    const axisT = Math.max(0, Math.min(1, 0.5 - 0.5 * axisCoord / outerRadius));
-    const radialT = Math.max(0, Math.min(1, (radialDist - innerRadius) / (outerRadius - innerRadius)));
+    const axisT = Math.max(0, Math.min(1, 0.5 - 0.5 * axisCoord / disc.outerRadius));
+    const radialT = Math.max(0, Math.min(1, (radialDist - disc.innerRadius) / (disc.outerRadius - disc.innerRadius)));
+    const axisColor = vec3(
+        disc.farColor.r + (disc.nearColor.r - disc.farColor.r) * axisT,
+        disc.farColor.g + (disc.nearColor.g - disc.farColor.g) * axisT,
+        disc.farColor.b + (disc.nearColor.b - disc.farColor.b) * axisT,
+    );
 
     return vec3(
-        255,
-        85 + 120 * axisT + 45 * radialT,
-        0 + 8 * axisT + 18 * radialT,
+        axisColor.x + disc.radialBoost.r * radialT,
+        axisColor.y + disc.radialBoost.g * radialT,
+        axisColor.z + disc.radialBoost.b * radialT,
     );
 };
 
@@ -257,10 +266,10 @@ const intersection = (origin: Vector3, direction: Vector3, objects: RenderOBJ[])
 const trace = (origin: Vector3, direction: Vector3, worldObjects: renderObjects, steps: number): Vector3 | null => {
     const blackhole = worldObjects.blackhole;
     const hit = intersection(origin, direction, [worldObjects.blackhole, ...worldObjects.spheres]);
-    const discHit = intersectDisc(origin, direction, blackhole);
+    const discHit = intersectDisc(origin, direction, worldObjects.disc);
 
     if (discHit.collided && (!hit.collided || discHit.dist < hit.dist)) {
-        return sampleDisc(origin, discHit.point, blackhole);
+        return sampleDisc(origin, discHit.point, worldObjects.disc);
     }
 
     if (hit.collided && steps > 0) {
@@ -271,6 +280,7 @@ const trace = (origin: Vector3, direction: Vector3, worldObjects: renderObjects,
             reflectedDirection,
             {
                 blackhole: worldObjects.blackhole,
+                disc: worldObjects.disc,
                 spheres: worldObjects.spheres.filter((o) => o !== hit.object),
             },
             steps - 1,
@@ -540,8 +550,15 @@ const segmentSphereIntersection = (
 const segmentDiscIntersection = (
     segmentStart: Vector3,
     segmentEnd: Vector3,
-    blackhole: BlackHole,
+    disc: Disc,
 ): PLANE_INTERSECTION => {
+    if (!disc.visible) {
+        return {
+            collided: false,
+            dist: Infinity,
+        };
+    }
+
     const segment = sub(segmentEnd, segmentStart);
 
     if (Math.abs(segment.y) < 1e-9) {
@@ -551,7 +568,7 @@ const segmentDiscIntersection = (
         };
     }
 
-    const t = (blackhole.pos.y - segmentStart.y) / segment.y;
+    const t = (disc.pos.y - segmentStart.y) / segment.y;
     if (t < 0 || t > 1) {
         return {
             collided: false,
@@ -560,12 +577,10 @@ const segmentDiscIntersection = (
     }
 
     const point = add(segmentStart, mul(segment, t));
-    const local = sub(point, blackhole.pos);
+    const local = sub(point, disc.pos);
     const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
-    const innerRadius = 1.5 * blackhole.schwarzschildRadius;
-    const outerRadius = 2.6 * blackhole.schwarzschildRadius;
 
-    if (radialDist < innerRadius || radialDist > outerRadius) {
+    if (radialDist < disc.innerRadius || radialDist > disc.outerRadius) {
         return {
             collided: false,
             dist: Infinity,
@@ -623,10 +638,10 @@ const traceGeodesic = (
         ));
 
         const objectHit = segmentSphereIntersection(previousWorldPoint, currentWorldPoint, [worldObjects.blackhole, ...worldObjects.spheres]);
-        const discHit = segmentDiscIntersection(previousWorldPoint, currentWorldPoint, blackhole);
+        const discHit = segmentDiscIntersection(previousWorldPoint, currentWorldPoint, worldObjects.disc);
 
         if (discHit.collided && (!objectHit.collided || discHit.dist < objectHit.dist)) {
-            return sampleDisc(colorOrigin, discHit.point, blackhole);
+            return sampleDisc(colorOrigin, discHit.point, worldObjects.disc);
         }
 
         if (objectHit.collided) {
@@ -641,6 +656,7 @@ const traceGeodesic = (
             const reflectedDirection = reflect(currentDirection, objectHit.normal);
             const reflectedWorldObjects = {
                 blackhole: worldObjects.blackhole,
+                disc: worldObjects.disc,
                 spheres: worldObjects.spheres.filter((object) => object !== objectHit.object),
             } satisfies renderObjects;
             const reflectedColor = traceGeodesic(objectHit.point, reflectedDirection, reflectedWorldObjects, steps - 1, colorOrigin);

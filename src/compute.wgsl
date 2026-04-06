@@ -5,6 +5,11 @@ struct SceneUniforms {
     cameraUp: vec4f,
     screen: vec4f,
     blackhole: vec4f,
+    discPos: vec4f,
+    discParams: vec4f,
+    discNearColor: vec4f,
+    discFarColor: vec4f,
+    discRadialBoost: vec4f,
 };
 
 struct Sphere {
@@ -265,46 +270,44 @@ fn segmentSphereIntersection(
     return Intersection(true, dist, point, normal, color, kind);
 }
 
-fn sampleDisc(origin: vec3f, point: vec3f, blackholePos: vec3f, schwarzschildRadius: f32) -> vec3f {
-    let local = point - blackholePos;
+fn sampleDisc(origin: vec3f, point: vec3f) -> vec3f {
+    let local = point - scene.discPos.xyz;
     let radialDist = length(vec2f(local.x, local.z));
-    let innerRadius = 1.5 * schwarzschildRadius;
-    let outerRadius = 2.6 * schwarzschildRadius;
-    let cameraAxis = normalize(vec3f(origin.x - blackholePos.x, 0.0, origin.z - blackholePos.z));
+    let innerRadius = scene.discParams.x;
+    let outerRadius = scene.discParams.y;
+    let cameraAxis = normalize(vec3f(origin.x - scene.discPos.x, 0.0, origin.z - scene.discPos.z));
     let axisCoord = dot(local, cameraAxis);
     let axisT = clamp(0.5 - 0.5 * axisCoord / outerRadius, 0.0, 1.0);
     let radialT = clamp((radialDist - innerRadius) / (outerRadius - innerRadius), 0.0, 1.0);
-
-    return vec3f(
-        1.0,
-        (85.0 + 120.0 * axisT + 45.0 * radialT) / 255.0,
-        (0.0 + 8.0 * axisT + 18.0 * radialT) / 255.0,
-    );
+    let axisColor = lerpColor(scene.discFarColor.xyz, scene.discNearColor.xyz, axisT);
+    return clamp(axisColor + scene.discRadialBoost.xyz * radialT, vec3f(0.0), vec3f(1.0));
 }
 
 fn segmentDiscIntersection(
     segmentStart: vec3f,
     segmentEnd: vec3f,
     origin: vec3f,
-    blackholePos: vec3f,
-    schwarzschildRadius: f32,
 ) -> Intersection {
+    if (scene.discParams.z < 0.5) {
+        return emptyIntersection();
+    }
+
     let segment = segmentEnd - segmentStart;
 
     if (abs(segment.y) < 1e-9) {
         return emptyIntersection();
     }
 
-    let t = (blackholePos.y - segmentStart.y) / segment.y;
+    let t = (scene.discPos.y - segmentStart.y) / segment.y;
     if (t < 0.0 || t > 1.0) {
         return emptyIntersection();
     }
 
     let point = segmentStart + segment * t;
-    let local = point - blackholePos;
+    let local = point - scene.discPos.xyz;
     let radialDist = length(vec2f(local.x, local.z));
-    let innerRadius = 1.5 * schwarzschildRadius;
-    let outerRadius = 2.6 * schwarzschildRadius;
+    let innerRadius = scene.discParams.x;
+    let outerRadius = scene.discParams.y;
 
     if (radialDist < innerRadius || radialDist > outerRadius) {
         return emptyIntersection();
@@ -315,7 +318,7 @@ fn segmentDiscIntersection(
         length(segment) * t,
         point,
         vec3f(0.0, 1.0, 0.0),
-        sampleDisc(origin, point, blackholePos, schwarzschildRadius),
+        sampleDisc(origin, point),
         3u,
     );
 }
@@ -365,7 +368,7 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
                 ),
             );
         }
-        hit = closestIntersection(hit, segmentDiscIntersection(previousWorldPoint, currentWorldPoint, rayOrigin, blackholePos, schwarzschildRadius));
+        hit = closestIntersection(hit, segmentDiscIntersection(previousWorldPoint, currentWorldPoint, rayOrigin));
 
         if (hit.collided) {
             return TraceResult(true, hit.color);

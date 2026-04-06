@@ -27,10 +27,21 @@ export type BlackHole = Sphere & {
     gravity: number;
 };
 
+export type Disc = {
+    pos: Vector3;
+    innerRadius: number;
+    outerRadius: number;
+    visible: boolean;
+    nearColor: RGB;
+    farColor: RGB;
+    radialBoost: RGB;
+};
+
 export type RenderOBJ = Sphere | BlackHole;
 
 export type renderObjects = {
     blackhole: BlackHole;
+    disc: Disc;
     spheres: Sphere[];
 };
 

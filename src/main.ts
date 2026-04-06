@@ -1,7 +1,7 @@
 import computeShaderSource from "./compute.wgsl";
 import { cameraForward, cameraRight, cameraUp, dot, handleCameraKeyArrows, handleCameraMouseDrag, orbitCamera, rgb, sub, vec3 } from "./common";
 import { cpuPipeline } from "./cpuPipeline";
-import type { BlackHole, Camera, MouseDrag, WorldConfig, renderObjects } from "./types";
+import type { BlackHole, Camera, Disc, MouseDrag, WorldConfig, renderObjects } from "./types";
 
 const canvasElement = document.getElementById("blackhole-canvas");
 
@@ -51,8 +51,19 @@ const camera = {
     focalLength: 600,
 } satisfies Camera;
 
+const disc = {
+    pos: blackHole.pos,
+    innerRadius: 1.5 * SCHWARZSCHILD_RADIUS,
+    outerRadius: 2.6 * SCHWARZSCHILD_RADIUS,
+    visible: true,
+    nearColor: rgb(255, 230, 131),
+    farColor: rgb(255, 85, 0),
+    radialBoost: rgb(45, 34, 0),
+} satisfies Disc;
+
 const worldObjects: renderObjects = {
     blackhole: blackHole,
+    disc,
     spheres: [
         {
             pos: vec3(-4.5 * SCHWARZSCHILD_RADIUS, 0, 0),
@@ -71,10 +82,11 @@ const worldObjects: renderObjects = {
     ],
 };
 
-const runtimeFlags = globalThis as typeof globalThis & { runGeodesic?: boolean };
+const runtimeFlags = globalThis as typeof globalThis & { runGeodesic?: boolean; renderDisc?: boolean };
 runtimeFlags.runGeodesic = runtimeFlags.runGeodesic ?? false;
+runtimeFlags.renderDisc = runtimeFlags.renderDisc ?? true;
 
-const gpuSceneData = new Float32Array(6 * 4);
+const gpuSceneData = new Float32Array(11 * 4);
 const GPU_SPHERE_FLOATS = 8;
 
 const fpsOverlay = document.createElement("div");
@@ -242,8 +254,10 @@ const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
     console.log("WebGPU unavailable. Defaulted to CPU pipeline renderer.");
     console.log("CPU geodesic raytracing is OFF by default.");
     console.log("Run `runGeodesic = true` in the console to enable it.");
+    console.log("Run `renderDisc = false` in the console to hide the disc.");
 
     window.setInterval(() => {
+        worldObjects.disc.visible = runtimeFlags.renderDisc ?? true;
         cpuPipeline(ctx, image, camera, worldObjects, worldConf, runtimeFlags.runGeodesic ?? false);
         //console.log("Completed CPU render cycle.");
         reportFrame(runtimeFlags.runGeodesic ?? false ? "CPU geodesic" : "CPU");
@@ -365,6 +379,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
         });
 
         const frame = (): void => {
+            worldObjects.disc.visible = runtimeFlags.renderDisc ?? true;
             const cameraPos = orbitCamera(camera);
             const forward = cameraForward(cameraPos, camera);
             const right = cameraRight(forward);
@@ -422,6 +437,31 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             gpuSceneData.set([up.x, up.y, up.z, 0], 12);
             gpuSceneData.set([SCREEN_WIDTH, SCREEN_HEIGHT, camera.focalLength, worldObjects.spheres.length], 16);
             gpuSceneData.set([blackHole.pos.x, blackHole.pos.y, blackHole.pos.z, blackHole.schwarzschildRadius], 20);
+            gpuSceneData.set([worldObjects.disc.pos.x, worldObjects.disc.pos.y, worldObjects.disc.pos.z, 0], 24);
+            gpuSceneData.set([
+                worldObjects.disc.innerRadius,
+                worldObjects.disc.outerRadius,
+                worldObjects.disc.visible ? 1 : 0,
+                0,
+            ], 28);
+            gpuSceneData.set([
+                worldObjects.disc.nearColor.r / 255,
+                worldObjects.disc.nearColor.g / 255,
+                worldObjects.disc.nearColor.b / 255,
+                0,
+            ], 32);
+            gpuSceneData.set([
+                worldObjects.disc.farColor.r / 255,
+                worldObjects.disc.farColor.g / 255,
+                worldObjects.disc.farColor.b / 255,
+                0,
+            ], 36);
+            gpuSceneData.set([
+                worldObjects.disc.radialBoost.r / 255,
+                worldObjects.disc.radialBoost.g / 255,
+                worldObjects.disc.radialBoost.b / 255,
+                0,
+            ], 40);
 
             device.queue.writeBuffer(uniformBuffer, 0, gpuSceneData);
             device.queue.writeBuffer(sphereBuffer, 0, sphereData);
