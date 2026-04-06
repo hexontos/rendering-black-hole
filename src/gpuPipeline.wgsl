@@ -18,6 +18,9 @@ struct SceneUniforms {
     backgroundGradientTopRight: vec4f,
     backgroundGradientBottomLeft: vec4f,
     backgroundGradientBottomRight: vec4f,
+    backgroundMilkyWayParams: vec4f,
+    backgroundMilkyWayColor: vec4f,
+    geodesicParams: vec4f,
 };
 
 struct Sphere {
@@ -135,6 +138,15 @@ fn sampleStarField(direction: vec3f) -> vec3f {
     );
 
     var color = scene.backgroundStarsColor.xyz;
+    let milkyWayNormal = normalize(scene.backgroundMilkyWayParams.xyz);
+    let milkyWayWidth = max(scene.backgroundMilkyWayParams.w, 1e-4);
+    let planeDist = abs(dot(direction, milkyWayNormal));
+    let milkyWayBand = exp(-pow(planeDist / milkyWayWidth, 2.0));
+    let milkyWayNoise = 0.55 + 0.45 * hash21(skyUv * vec2f(220.0, 110.0));
+    let milkyWayStrength = milkyWayBand * milkyWayNoise * scene.backgroundMilkyWayColor.w;
+    let milkyWayCoreStrength = milkyWayStrength * (0.45 + 1.25 * milkyWayBand);
+
+    color = color + scene.backgroundMilkyWayColor.xyz * milkyWayStrength;
 
     let primaryUv = skyUv * vec2f(720.0, 360.0);
     let primaryBaseCell = floor(primaryUv);
@@ -145,20 +157,20 @@ fn sampleStarField(direction: vec3f) -> vec3f {
             let primaryLocal = primaryUv - primaryCell - vec2f(0.5);
             let primarySeed = hash21(primaryCell);
 
-            if (primarySeed > 1.0 - scene.backgroundParams.y) {
+            if (primarySeed > 1.0 - clamp(scene.backgroundParams.y + milkyWayCoreStrength * 0.085, 0.0, 0.28)) {
                 let starOffset = (hash22(primaryCell) - vec2f(0.5)) * 0.7;
                 let starDist = length(primaryLocal - starOffset);
                 let glow = smoothstep(0.14, 0.0, starDist);
                 let tintSeed = hash21(primaryCell + vec2f(19.7, 73.1));
                 var starColor = vec3f(1.0, 1.0, 1.0);
 
-                if (tintSeed > 0.992) {
+                if (tintSeed > 0.9975) {
                     starColor = vec3f(1.0, 0.58, 0.42);
-                } else if (tintSeed > 0.94) {
+                } else if (tintSeed > 0.985) {
                     starColor = vec3f(1.0, 0.9, 0.62);
                 }
 
-                color = color + starColor * glow * (0.8 + 1.35 * hash21(primaryCell + vec2f(101.3, 7.7)));
+                color = color + starColor * glow * (0.8 + 1.35 * hash21(primaryCell + vec2f(101.3, 7.7)) + milkyWayCoreStrength * 3.2);
             }
         }
     }
@@ -172,11 +184,38 @@ fn sampleStarField(direction: vec3f) -> vec3f {
             let secondaryLocal = secondaryUv - secondaryCell - vec2f(0.5);
             let secondarySeed = hash21(secondaryCell + vec2f(211.0, 503.0));
 
-            if (secondarySeed > 1.0 - scene.backgroundParams.z) {
+            if (secondarySeed > 1.0 - clamp(scene.backgroundParams.z + milkyWayCoreStrength * 0.05, 0.0, 0.22)) {
                 let starOffset = (hash22(secondaryCell + vec2f(5.2, 91.7)) - vec2f(0.5)) * 0.5;
                 let starDist = length(secondaryLocal - starOffset);
                 let glow = smoothstep(0.06, 0.0, starDist);
-                color = color + vec3f(1.0, 1.0, 1.0) * glow * 0.4;
+                color = color + vec3f(1.0, 1.0, 1.0) * glow * (0.4 + milkyWayCoreStrength * 0.9);
+            }
+        }
+    }
+
+    let milkyWayBrightUv = skyUv * vec2f(520.0, 260.0);
+    let milkyWayBrightBaseCell = floor(milkyWayBrightUv);
+
+    for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
+        for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
+            let brightCell = milkyWayBrightBaseCell + vec2f(f32(ox), f32(oy));
+            let brightLocal = milkyWayBrightUv - brightCell - vec2f(0.5);
+            let brightSeed = hash21(brightCell + vec2f(401.0, 887.0));
+
+            if (brightSeed > 1.0 - clamp(milkyWayCoreStrength * 0.16, 0.0, 0.12)) {
+                let starOffset = (hash22(brightCell + vec2f(13.0, 37.0)) - vec2f(0.5)) * 0.65;
+                let starDist = length(brightLocal - starOffset);
+                let glow = smoothstep(0.18, 0.0, starDist);
+                let tintSeed = hash21(brightCell + vec2f(97.0, 31.0));
+                var starColor = vec3f(1.0, 1.0, 1.0);
+
+                if (tintSeed > 0.9985) {
+                    starColor = vec3f(1.0, 0.6, 0.45);
+                } else if (tintSeed > 0.992) {
+                    starColor = vec3f(1.0, 0.9, 0.68);
+                }
+
+                color = color + starColor * glow * (1.25 + milkyWayCoreStrength * 5.5);
             }
         }
     }
@@ -315,6 +354,23 @@ fn worldDirection(ray: GeodesicRay) -> vec3f {
     );
 }
 
+fn invalidGeodesicRay(ray: GeodesicRay) -> bool {
+    return
+        ray.r != ray.r ||
+        ray.theta != ray.theta ||
+        ray.phi != ray.phi ||
+        ray.dr != ray.dr ||
+        ray.dtheta != ray.dtheta ||
+        ray.dphi != ray.dphi ||
+        ray.r <= 0.0 ||
+        abs(ray.r) > 1e18 ||
+        abs(ray.theta) > 1e6 ||
+        abs(ray.phi) > 1e6 ||
+        abs(ray.dr) > 1e12 ||
+        abs(ray.dtheta) > 1e6 ||
+        abs(ray.dphi) > 1e6;
+}
+
 fn segmentSphereIntersection(
     segmentStart: vec3f,
     segmentEnd: vec3f,
@@ -371,6 +427,33 @@ fn sampleDisc(_origin: vec3f, point: vec3f) -> vec3f {
     return clamp(radialColor + scene.discRadialBoost.xyz * innerT, vec3f(0.0), vec3f(1.0));
 }
 
+fn discNoiseHole(point: vec3f) -> bool {
+    if (scene.discParams.w < 0.5) {
+        return false;
+    }
+
+    let local = point - scene.discPos.xyz;
+    let radialDist = length(vec2f(local.x, local.z));
+    let radialT = clamp((radialDist - scene.discParams.x) / max(scene.discParams.y - scene.discParams.x, 1e-6), 0.0, 1.0);
+    let innerT = 1.0 - radialT;
+    let scale = max(scene.discParams.y * 0.55, 1e-6);
+    let noiseUv = vec2f(local.x, local.z) / scale * 42.0;
+    let cell = floor(noiseUv);
+    let seed = hash21(cell + vec2f(313.0, 191.0));
+    let noiseDensity = scene.discRadialBoost.w;
+
+    if (seed <= 1.0 - noiseDensity) {
+        return false;
+    }
+
+    let localCell = noiseUv - cell - vec2f(0.5);
+    let offset = (hash22(cell + vec2f(17.0, 59.0)) - vec2f(0.5)) * 0.65;
+    let dist = length(localCell - offset);
+    let radius = 0.08 + innerT * 0.1;
+
+    return dist < radius;
+}
+
 fn segmentDiscIntersection(
     segmentStart: vec3f,
     segmentEnd: vec3f,
@@ -396,8 +479,13 @@ fn segmentDiscIntersection(
     let radialDist = length(vec2f(local.x, local.z));
     let innerRadius = scene.discParams.x;
     let outerRadius = scene.discParams.y;
+    let innerEdgeBias = scene.blackhole.w * 0.1;
 
-    if (radialDist < innerRadius || radialDist > outerRadius) {
+    if (
+        radialDist < innerRadius + innerEdgeBias ||
+        radialDist > outerRadius ||
+        discNoiseHole(point)
+    ) {
         return emptyIntersection();
     }
 
@@ -424,24 +512,33 @@ fn closestIntersection(current: Intersection, candidate: Intersection) -> Inters
 fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
     let blackholePos = scene.blackhole.xyz;
     let schwarzschildRadius = scene.blackhole.w;
+    let captureRadius = schwarzschildRadius * 1.035;
     let sphereCount = u32(scene.screen.w);
     let localOrigin = rayOrigin - blackholePos;
     let baseRay = ray(localOrigin, rayDirection);
     var geodesicRay = gRay(baseRay, schwarzschildRadius);
 
-    let dλ: f32 = 1e8;
-    let maxGeodesicSteps: u32 = 4096u;
-    let escapeRadius: f32 = 30.0 * schwarzschildRadius;
+    let dλ: f32 = scene.geodesicParams.x;
+    let maxGeodesicSteps: u32 = u32(scene.geodesicParams.y);
+    let escapeRadius: f32 = scene.geodesicParams.z * schwarzschildRadius;
     var previousWorldPoint = rayOrigin;
 
     for (var stepIndex: u32 = 0u; stepIndex < maxGeodesicSteps; stepIndex = stepIndex + 1u) {
         geodesicRay = fourthOrderRungeKutta(geodesicRay, dλ, schwarzschildRadius);
 
+        if (invalidGeodesicRay(geodesicRay)) {
+            return TraceResult(true, vec3f(0.0));
+        }
+
+        if (geodesicRay.r <= captureRadius) {
+            return TraceResult(true, vec3f(0.0));
+        }
+
         let currentWorldPoint = worldPoint(geodesicRay, blackholePos);
         let _currentDirection = worldDirection(geodesicRay);
 
         var hit = emptyIntersection();
-        hit = closestIntersection(hit, segmentSphereIntersection(previousWorldPoint, currentWorldPoint, blackholePos, schwarzschildRadius, vec3f(0.0), 1u));
+        hit = closestIntersection(hit, segmentSphereIntersection(previousWorldPoint, currentWorldPoint, blackholePos, captureRadius, vec3f(0.0), 1u));
         for (var sphereIndex: u32 = 0u; sphereIndex < sphereCount; sphereIndex = sphereIndex + 1u) {
             let sphere = spheres[sphereIndex];
             hit = closestIntersection(
@@ -462,7 +559,7 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
             return TraceResult(true, hit.color);
         }
 
-        if (geodesicRay.r <= schwarzschildRadius) {
+        if (geodesicRay.r <= captureRadius) {
             return TraceResult(true, vec3f(0.0));
         }
 

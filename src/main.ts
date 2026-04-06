@@ -58,10 +58,18 @@ const disc = {
     innerRadius: 1.8 * SCHWARZSCHILD_RADIUS,
     outerRadius: 2.7 * SCHWARZSCHILD_RADIUS,
     visible: true,
+    noiseVisible: false,
+    noiseDensity: 0.1, // 0...1
     nearColor: rgb(255, 102, 0),
     farColor: rgb(255, 208, 18),
     radialBoost: rgb(28, 6, 0),
 } satisfies Disc;
+
+const renderGeodesic = {
+    dλ: 5e7, // previously faster option was dλ: 1e8 and maxSteps 4096, but blackhole has weird noise outside vertically
+    maxSteps: 8192,
+    escapeRadiusMultiplier: 30,
+} satisfies renderObjects["renderGeodesic"];
 
 const grid = {
     pos: vec3(
@@ -81,6 +89,11 @@ const background = {
         densityPrimary: 0.023,
         densitySecondary: 0.011,
         baseColor: rgb(3, 4, 8),
+        milkyWayVisible: false,
+        milkyWayNormal: vec3(0.26, 0.9, -0.34),
+        milkyWayWidth: 0.17,
+        milkyWayIntensity: 0.42,
+        milkyWayColor: rgb(128, 112, 84),
     },
     gradient: {
         topLeft: rgb(255, 48, 48),
@@ -97,6 +110,7 @@ const worldObjects: renderObjects = {
     background,
     blackhole: blackHole,
     disc,
+    renderGeodesic,
     grid,
     spheres: [
         {
@@ -132,7 +146,7 @@ runtimeFlags.runGeodesic = runtimeFlags.runGeodesic ?? false;
 runtimeFlags.renderDisc = runtimeFlags.renderDisc ?? true;
 runtimeFlags.backgroundMode = runtimeFlags.backgroundMode ?? worldObjects.background.mode;
 
-const gpuSceneData = new Float32Array(19 * 4);
+const gpuSceneData = new Float32Array(22 * 4);
 const GPU_SPHERE_FLOATS = 8;
 
 const fpsOverlay = document.createElement("div");
@@ -434,7 +448,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 worldObjects.disc.innerRadius,
                 worldObjects.disc.outerRadius,
                 worldObjects.disc.visible ? 1 : 0,
-                0,
+                worldObjects.disc.noiseVisible ? 1 : 0,
             ], 28);
             gpuSceneData.set([
                 worldObjects.disc.nearColor.r / 255,
@@ -452,7 +466,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 worldObjects.disc.radialBoost.r / 255,
                 worldObjects.disc.radialBoost.g / 255,
                 worldObjects.disc.radialBoost.b / 255,
-                0,
+                worldObjects.disc.noiseDensity,
             ], 40);
             gpuSceneData.set([
                 worldObjects.grid.lineColor.r / 255,
@@ -502,6 +516,24 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 worldObjects.background.gradient.bottomRight.b / 255,
                 0,
             ], 72);
+            gpuSceneData.set([
+                worldObjects.background.stars.milkyWayNormal.x,
+                worldObjects.background.stars.milkyWayNormal.y,
+                worldObjects.background.stars.milkyWayNormal.z,
+                worldObjects.background.stars.milkyWayWidth,
+            ], 76);
+            gpuSceneData.set([
+                worldObjects.background.stars.milkyWayColor.r / 255,
+                worldObjects.background.stars.milkyWayColor.g / 255,
+                worldObjects.background.stars.milkyWayColor.b / 255,
+                worldObjects.background.stars.milkyWayVisible ? worldObjects.background.stars.milkyWayIntensity : 0,
+            ], 80);
+            gpuSceneData.set([
+                worldObjects.renderGeodesic.dλ,
+                worldObjects.renderGeodesic.maxSteps,
+                worldObjects.renderGeodesic.escapeRadiusMultiplier,
+                0,
+            ], 84);
 
             device.queue.writeBuffer(uniformBuffer, 0, gpuSceneData);
             device.queue.writeBuffer(sphereBuffer, 0, sphereData);

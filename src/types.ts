@@ -32,9 +32,17 @@ export type Disc = {
     innerRadius: number;
     outerRadius: number;
     visible: boolean;
+    noiseVisible: boolean;
+    noiseDensity: number;
     nearColor: RGB;
     farColor: RGB;
     radialBoost: RGB;
+};
+
+export type RenderGeodesic = {
+    dλ: number;
+    maxSteps: number;
+    escapeRadiusMultiplier: number;
 };
 
 export type Grid = {
@@ -51,6 +59,11 @@ export type StarsBackground = {
     densityPrimary: number;
     densitySecondary: number;
     baseColor: RGB;
+    milkyWayVisible: boolean;
+    milkyWayNormal: Vector3;
+    milkyWayWidth: number;
+    milkyWayIntensity: number;
+    milkyWayColor: RGB;
 };
 
 export type GradientBackground = {
@@ -77,6 +90,7 @@ export type renderObjects = {
     background: Background;
     blackhole: BlackHole;
     disc: Disc;
+    renderGeodesic: RenderGeodesic;
     grid: Grid;
     spheres: Sphere[];
 };
