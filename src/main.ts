@@ -1,709 +1,15 @@
-///////////
-// TYPES //
-///////////
-
-type RGB = {
-    r: number;
-    g: number;
-    b: number;
-};
-
-type Vector3 = { // go back to list, its mind dumbingly easier to manipulate with it <--------- NOTE
-    x: number;
-    y: number;
-    z: number;
-};
-
-type SchwarzschildRadius = number;
-
-// stars or other scene objects circling the black hole.
-type Sphere = {
-    pos: Vector3;
-    radius: number;
-    emission: RGB;
-    reflectivity: RGB;
-    roughness: number;
-};
-
-type BlackHole = Sphere & {
-    mass: number;
-    schwarzschildRadius: SchwarzschildRadius;
-    gravity: number;
-};
-
-type RenderOBJ = Sphere | BlackHole;
-
-type renderObjects = {
-    b: BlackHole;
-    spheres: Sphere[];
-};
-
-type Ray = {
-    // cartesian state.
-    pos: Vector3;
-    dir: Vector3;
-    // polar state
-    r: number;
-    phi: number;
-    // seed velocities
-    dr: number;
-    dphi: number;
-};
-
-type GeodesicRay = Ray & {
-    // Conserved quantities (in Schwarzschild spacetime)
-    E: number;
-    L: number;
-};
-
-type Camera = {
-    target: BlackHole;
-    radius: number;
-    yaw: number;
-    pitch: number;
-    focalLength: number;
-};
-
-type INTERSECTION =
-    | {
-        collided: true;
-        point: Vector3;
-        dist: number;
-        normal: Vector3;
-        object: RenderOBJ;
-    }
-    | {
-        collided: false;
-        dist: number;
-    };
-
-type PLANE_INTERSECTION =
-    | {
-        collided: true;
-        dist: number;
-        point: Vector3;
-    }
-    | {
-        collided: false;
-        dist: number;
-    };
-
-type WorldConfig = {
-    screenWidth: number;
-    screenHeight: number;
-    simWidth: number;
-    simHeight: number;
-    c: number;
-    g: number;
-    solarMass: number;
-    sagittariusAMass: number;
-    worldCenter: Vector3;
-    screenCenter: Vector3;
-};
-
-type MouseDrag = {
-    active: boolean;
-    lastX: number;
-    lastY: number;
-};
-
-////////////////////
-// Event Listener //
-////////////////////
-
-
-const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step: number = 0.1): void => {
-    const pitchLimit = Math.PI * 0.5 - 0.01;
-
-    if (event.key === "ArrowLeft") {
-        camera.yaw -= step;
-        event.preventDefault();
-    };
-
-    if (event.key === "ArrowRight") {
-        camera.yaw += step;
-        event.preventDefault();
-    };
-
-    if (event.key === "ArrowUp") {
-        camera.pitch += step;
-        camera.pitch = Math.min(camera.pitch, pitchLimit);
-        event.preventDefault();
-    }
-
-    if (event.key === "ArrowDown") {
-        camera.pitch -= step;
-        camera.pitch = Math.max(camera.pitch, -pitchLimit);
-        event.preventDefault();
-    }
-}
-
-const handleCameraMouseDrag = (
-    event: MouseEvent,
-    camera: Camera,
-    mouseDrag: MouseDrag,
-    sensitivity: number = 0.005,
-): void => {
-    if (!mouseDrag.active) return;
-
-    const dx = event.clientX - mouseDrag.lastX;
-    const dy = event.clientY - mouseDrag.lastY;
-
-    mouseDrag.lastX = event.clientX;
-    mouseDrag.lastY = event.clientY;
-
-    camera.yaw += dx * sensitivity;
-    camera.pitch -= dy * sensitivity;
-
-    const pitchLimit = Math.PI * 0.5 - 0.01;
-    camera.pitch = Math.max(-pitchLimit, Math.min(camera.pitch, pitchLimit));
-};
-
-/////////////////////
-// ARROW FUNCTIONS //
-/////////////////////
-
-const rgb = (r: number, g: number, b: number) => ({ r, g, b } satisfies RGB);
-
-const vec3 = (x: number, y: number, z: number) => ({ x, y, z } satisfies Vector3);
-
-const ray = (pos: Vector3, dir: Vector3): Ray => {
-    const r = Math.hypot(pos.x, pos.y);
-    const phi = Math.atan2(pos.y, pos.x);
-    if (r === 0) throw new Error("Cannot initialize a ray at the origin....");
-    const dr = dir.x * Math.cos(phi) + dir.y * Math.sin(phi);
-    const dphi = (-dir.x * Math.sin(phi) + dir.y * Math.cos(phi)) / r;
-
-    return {
-        pos,
-        dir,
-        r,
-        phi,
-        dr,
-        dphi,
-    };
-};
-
-const gRay = (ray: Ray, blackHole: BlackHole): GeodesicRay => {
-    const L = ray.r ** 2 * ray.dphi;
-    const f = 1.0 - blackHole.schwarzschildRadius / ray.r;
-    const dt_dλ = Math.sqrt((ray.dr ** 2) / (f ** 2) + ((ray.r ** 2) * (ray.dphi ** 2)) / f);
-    const E = f * dt_dλ;
-
-    return {
-        ...ray,
-        E,
-        L,
-    };
-};
-
-/////////////////////////
-// CPU PIPELINE RENDER //
-/////////////////////////
-
-const cross = (a: Vector3, b: Vector3): Vector3 => {
-    return vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
-};
-
-const orbitCamera = (camera: Camera): Vector3 => {
-    // for now only x&z axis
-    const center = camera.target.pos;
-
-    return vec3(
-          center.x + camera.radius * Math.cos(camera.pitch) * Math.cos(camera.yaw),
-          center.y + camera.radius * Math.sin(camera.pitch),
-          center.z + camera.radius * Math.cos(camera.pitch) * Math.sin(camera.yaw),
-      );
-};
-
-const cameraForward = (cPos: Vector3, camera: Camera): Vector3 => {
-    return normalize(sub(camera.target.pos, cPos));
-};
-
-const cameraUp = (forward: Vector3, right: Vector3): Vector3 => {
-    return normalize(cross(forward, right));
-};
-
-const cameraRight = (forward: Vector3): Vector3 => {
-    const worldUp = vec3(0, 1, 0);
-    return normalize(cross(worldUp, forward));
-};
-
-const reflect = (direction: Vector3, normal: Vector3): Vector3 => {
-    return sub(direction, mul(normal, dot(direction, normal) * 2));
-};
-
-const mulParts = (a: Vector3, b: Vector3): Vector3 => {
-    return vec3(a.x * b.x, a.y * b.y, a.z * b.z);
-};
-
-const dot = (a: Vector3, b: Vector3): number => {
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-};
-
-const mag = (a: Vector3): number => {
-    const ret = Math.sqrt(a.x ** 2 + a.y ** 2 + a.z ** 2)
-    if (ret === 0) return 1;
-    return ret;
-};
-
-const mul = (a: Vector3, b: number): Vector3 => {
-    return vec3(a.x * b, a.y * b, a.z * b);
-};
-
-const sub = (a: Vector3, b: Vector3): Vector3 => {
-    return vec3(a.x - b.x, a.y - b.y, a.z - b.z);
-};
-
-const add = (a: Vector3, b: Vector3): Vector3 => {
-    return vec3(a.x + b.x, a.y + b.y, a.z + b.z);
-};
-
-const normalize = (vector: Vector3): Vector3 => {
-    const { x, y, z } = vector;
-    const magV = 1 / mag(vector);
-    return vec3(x*magV, y*magV, z*magV);
-};
-
-const intersectPlane = (origin: Vector3, direction: Vector3, planeY: number): PLANE_INTERSECTION => {
-    if (Math.abs(direction.y) < 1e-9) {
-        return {
-            collided: false,
-            dist: Infinity,
-        };
-    }
-
-    const dist = (planeY - origin.y) / direction.y;
-    if (dist <= 0) {
-        return {
-            collided: false,
-            dist: Infinity,
-        };
-    }
-
-    return {
-        collided: true,
-        dist,
-        point: add(origin, mul(direction, dist)),
-    };
-};
-
-const sampleGrid = (point: Vector3, cellSize: number, lineWidth: number, halfSize: number): Vector3 | null => {
-    const local = sub(point, blackHole.pos);
-    if (Math.abs(local.x) > halfSize || Math.abs(local.z) > halfSize) return null;
-
-    const gx = ((local.x % cellSize) + cellSize) % cellSize;
-    const gz = ((local.z % cellSize) + cellSize) % cellSize;
-
-    const onLine =
-        gx < lineWidth ||
-        gx > cellSize - lineWidth ||
-        gz < lineWidth ||
-        gz > cellSize - lineWidth;
-
-    if (onLine) return vec3(255, 255, 255);
-    return null;
-};
-
-const gridVertexY = (
-    localX: number,
-    localZ: number,
-    baseY: number,
-    maxDrop: number,
-    halfSize: number,
-): number => {
-    const radialDist = Math.sqrt(localX ** 2 + localZ ** 2);
-    const edgeT = Math.max(0, 1 - radialDist / halfSize);
-    const strength = (Math.exp(4 * edgeT) - 1) / (Math.exp(4) - 1);
-    return baseY - maxDrop * strength;
-};
-
-const projectPoint = (
-    point: Vector3,
-    cameraPos: Vector3,
-    forward: Vector3,
-    right: Vector3,
-    up: Vector3,
-    wc: WorldConfig,
-    focalLength: number,
-): { x: number; y: number } | null => {
-    const relative = sub(point, cameraPos);
-    const depth = dot(relative, forward);
-    if (depth <= 0) return null;
-
-    const screenX = wc.screenWidth * 0.5 + focalLength * dot(relative, right) / depth;
-    const screenY = wc.screenHeight * 0.5 - focalLength * dot(relative, up) / depth;
-
-    return {
-        x: screenX,
-        y: screenY,
-    };
-};
-
-const drawLineToImage = (
-    image: ImageData,
-    x0: number,
-    y0: number,
-    x1: number,
-    y1: number,
-    color: Vector3,
-    wc: WorldConfig,
-): void => {
-    const pixels: ImageDataArray = image.data;
-    let ix0 = Math.round(x0);
-    let iy0 = Math.round(y0);
-    const ix1 = Math.round(x1);
-    const iy1 = Math.round(y1);
-
-    const dx = Math.abs(ix1 - ix0);
-    const dy = Math.abs(iy1 - iy0);
-    const sx = ix0 < ix1 ? 1 : -1;
-    const sy = iy0 < iy1 ? 1 : -1;
-    let err = dx - dy;
-
-    while (true) {
-        if (ix0 >= 0 && ix0 < wc.screenWidth && iy0 >= 0 && iy0 < wc.screenHeight) {
-            const index = cpuPixelIndex(ix0, iy0, wc.screenWidth);
-            pixels[index + 0] = Math.round(color.x);
-            pixels[index + 1] = Math.round(color.y);
-            pixels[index + 2] = Math.round(color.z);
-            pixels[index + 3] = 255;
-        }
-
-        if (ix0 === ix1 && iy0 === iy1) break;
-
-        const e2 = 2 * err;
-        if (e2 > -dy) {
-            err -= dy;
-            ix0 += sx;
-        }
-        if (e2 < dx) {
-            err += dx;
-            iy0 += sy;
-        }
-    }
-};
-
-const intersectDisc = (origin: Vector3, direction: Vector3): PLANE_INTERSECTION => {
-    const discPlane = intersectPlane(origin, direction, blackHole.pos.y);
-
-    if (discPlane.collided) {
-        const local = sub(discPlane.point, blackHole.pos);
-        const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
-        const innerRadius = 1.5 * SCHWARZSCHILD_RADIUS; // photon sphere for Schwarzschild black hole.
-        const outerRadius = 2.6 * SCHWARZSCHILD_RADIUS;
-
-        if (radialDist >= innerRadius && radialDist <= outerRadius) {
-            return discPlane;
-        }
-    }
-
-    return {
-        collided: false,
-        dist: Infinity,
-    };
-};
-
-const sampleDisc = (origin: Vector3, point: Vector3): Vector3 => {
-    const local = sub(point, blackHole.pos);
-    const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
-    const innerRadius = 1.5 * SCHWARZSCHILD_RADIUS;
-    const outerRadius = 2.6 * SCHWARZSCHILD_RADIUS;
-    const cameraAxis = normalize(vec3(origin.x - blackHole.pos.x, 0, origin.z - blackHole.pos.z));
-    const axisCoord = dot(local, cameraAxis);
-    const axisT = Math.max(0, Math.min(1, 0.5 - 0.5 * axisCoord / outerRadius));
-    const radialT = Math.max(0, Math.min(1, (radialDist - innerRadius) / (outerRadius - innerRadius)));
-
-    return vec3(
-        255,
-        85 + 120 * axisT + 45 * radialT,
-        0 + 8 * axisT + 18 * radialT,
-    );
-};
-
-const traceBackgroundGrid = (_origin: Vector3, _direction: Vector3): Vector3 | null => {
-    return null;
-};
-
-const intersection = (origin: Vector3, direction: Vector3, objects: RenderOBJ[]): INTERSECTION => {
-    let minDist: number = Infinity;
-    let closestIntersection: Extract<INTERSECTION, { collided: true }> | undefined;
-    let collided: boolean = false;
-    let closestObject: RenderOBJ | undefined;
-
-    for (const object of objects) {
-        let currentIntersection: INTERSECTION;
-
-        const sphereRay = sub(object.pos, origin);
-        const distSphereRay = mag(sphereRay);
-        const distToClosestPointOnRay = dot(sphereRay, direction);
-        const distFromClosestPointToSphere = Math.sqrt(
-            Math.max(0, distSphereRay ** 2 - distToClosestPointOnRay ** 2),
-        );
-
-        const distToIntersection = distToClosestPointOnRay - Math.sqrt(
-            Math.abs(object.radius ** 2 - distFromClosestPointToSphere ** 2),
-        );
-        const point = add(origin, mul(direction, distToIntersection));
-        let normal = normalize(sub(point, object.pos));
-
-        // calc roughness
-        normal = normalize(add(normal, mul(vec3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5), object.roughness)));
-
-        if (distToClosestPointOnRay > 0 && distFromClosestPointToSphere < object.radius) {
-            currentIntersection = {
-                collided: true,
-                dist: distToIntersection,
-                point,
-                normal,
-                object,
-            };
-        } else {
-            currentIntersection = {
-                collided: false,
-                dist: Infinity,
-            };
-        }
-
-        if (currentIntersection.collided && currentIntersection.dist < minDist) {
-            closestIntersection = currentIntersection;
-            closestObject = object;
-            minDist = currentIntersection.dist;
-        }
-
-        collided = collided || currentIntersection.collided;
-    }
-
-    if (collided && closestIntersection != null && closestObject != null) {
-        return {
-            collided: true,
-            point: closestIntersection.point,
-            dist: closestIntersection.dist,
-            normal: closestIntersection.normal,
-            object: closestObject,
-        };
-    }
-
-    return {
-        collided: false,
-        dist: Infinity,
-    };
-};
-
-const trace = (origin: Vector3, direction: Vector3, renderObjects: RenderOBJ[], steps: number): Vector3 | null => {
-    const hit = intersection(origin, direction, renderObjects);
-    const discHit = intersectDisc(origin, direction);
-
-    if (discHit.collided && (!hit.collided || discHit.dist < hit.dist)) {
-        return sampleDisc(origin, discHit.point);
-    }
-
-    if (hit.collided && steps > 0) {
-        const reflectedOrigin = hit.point;
-        const reflectedDirection = reflect(direction, hit.normal);
-        const reflectedColor = trace(
-            reflectedOrigin,
-            reflectedDirection,
-            renderObjects.filter((o) => o !== hit.object),
-            steps - 1,
-        );
-        return add(
-            vec3(hit.object.emission.r, hit.object.emission.g, hit.object.emission.b),
-            reflectedColor == null
-                ? vec3(0, 0, 0)
-                : mulParts(
-                    reflectedColor,
-                    vec3(hit.object.reflectivity.r, hit.object.reflectivity.g, hit.object.reflectivity.b),
-                ),
-        );
-    }
-
-    return traceBackgroundGrid(origin, direction);
-};
-
-const cpuRenderGravityGrid = (
-    image: ImageData,
-    camera: Camera,
-    wc: WorldConfig,
-): void => {
-    const baseY = blackHole.pos.y - 0.7 * SCHWARZSCHILD_RADIUS;
-    const halfSize = 3.5 * SCHWARZSCHILD_RADIUS;
-    const cellSize = 0.35 * SCHWARZSCHILD_RADIUS;
-    const maxDrop = 1.8 * SCHWARZSCHILD_RADIUS;
-    const gridSteps = Math.round((2 * halfSize) / cellSize);
-    const lineColor = vec3(255, 255, 255);
-
-    const cameraPos = orbitCamera(camera);
-    const forward = cameraForward(cameraPos, camera);
-    const right = cameraRight(forward);
-    const up = cameraUp(forward, right);
-
-    const projected: ({ x: number; y: number } | null)[][] = [];
-
-    for (let z = 0; z <= gridSteps; z++) {
-        const row: ({ x: number; y: number } | null)[] = [];
-        for (let x = 0; x <= gridSteps; x++) {
-            const localX = -halfSize + x * cellSize;
-            const localZ = -halfSize + z * cellSize;
-            const point = vec3(
-                blackHole.pos.x + localX,
-                gridVertexY(localX, localZ, baseY, maxDrop, halfSize),
-                blackHole.pos.z + localZ,
-            );
-
-            row.push(projectPoint(point, cameraPos, forward, right, up, wc, camera.focalLength));
-        }
-        projected.push(row);
-    }
-
-    for (let z = 0; z <= gridSteps; z++) {
-        const row = projected[z];
-        if (row == null) continue;
-        const nextRow = projected[z + 1];
-
-        for (let x = 0; x <= gridSteps; x++) {
-            const current = row[x];
-            if (current == null) continue;
-
-            if (x < gridSteps) {
-                const horizontal = row[x + 1];
-                if (horizontal != null) {
-                    drawLineToImage(image, current.x, current.y, horizontal.x, horizontal.y, lineColor, wc);
-                }
-            }
-
-            if (z < gridSteps && nextRow != null) {
-                const vertical = nextRow[x];
-                if (vertical != null) {
-                    drawLineToImage(image, current.x, current.y, vertical.x, vertical.y, lineColor, wc);
-                }
-            }
-        }
-    }
-};
-
-const cpuPixelIndex = (x: number, y: number, screenWidth: number): number => (y * screenWidth + x) * 4;
-
-const cpuRenderRadientBG = (image: ImageData, wc: WorldConfig): void => {
-    const SCREEN_WIDTH = wc.screenWidth;
-    const SCREEN_HEIGHT = wc.screenHeight;
-
-    const pixels: ImageDataArray = image.data;
-
-    for (let y = 0; y < SCREEN_HEIGHT; y++) {
-        const v = y / Math.max(SCREEN_HEIGHT - 1, 1);
-        for (let x = 0; x < SCREEN_WIDTH; x++) {
-            const u = x / Math.max(SCREEN_WIDTH - 1, 1);
-            const i = cpuPixelIndex(x, y, SCREEN_WIDTH);
-            const topLeft = vec3(255, 48, 48);
-            const topRight = vec3(255, 220, 0);
-            const bottomLeft = vec3(24, 12, 120);
-            const bottomRight = vec3(160, 0, 255);
-
-            pixels[i + 0] = Math.round(
-                topLeft.x * (1 - u) * (1 - v) +
-                topRight.x * u * (1 - v) +
-                bottomLeft.x * (1 - u) * v +
-                bottomRight.x * u * v,
-            );
-            pixels[i + 1] = Math.round(
-                topLeft.y * (1 - u) * (1 - v) +
-                topRight.y * u * (1 - v) +
-                bottomLeft.y * (1 - u) * v +
-                bottomRight.y * u * v,
-            );
-            pixels[i + 2] = Math.round(
-                topLeft.z * (1 - u) * (1 - v) +
-                topRight.z * u * (1 - v) +
-                bottomLeft.z * (1 - u) * v +
-                bottomRight.z * u * v,
-            );
-            pixels[i + 3] = 255;
-        }
-    }
-};
-
-const toneMap = (value: number): number => 255 * (1 - Math.exp(-value * 0.02));
-const toByte = (value: number): number => Math.max(0, Math.min(255, Math.round(toneMap(value))));
-
-const cpuRenderRayTracing = (
-    _ctx: CanvasRenderingContext2D,
-    image: ImageData,
-    camera: Camera,
-    worldObjects: renderObjects,
-    wc: WorldConfig,
-): void => {
-    const SCREEN_WIDTH = wc.screenWidth;
-    const SCREEN_HEIGHT = wc.screenHeight;
-    const pixels: ImageDataArray = image.data;
-    const samples = 4; // for computing randomness like roughness material in spheres
-
-    const cameraPos = orbitCamera(camera);
-    const forward = cameraForward(cameraPos, camera);
-    const right = cameraRight(forward);
-    const up = cameraUp(forward, right);
-
-    // each pixel in canvas
-    for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
-        for (let i: number = 0; i < SCREEN_WIDTH; i++) {
-            const x: number = i - SCREEN_WIDTH * 0.5;
-            const y: number = j - SCREEN_HEIGHT * 0.5;
-
-            const rayDirection = normalize(add(add(mul(right, x), mul(up, -y),), mul(forward, camera.focalLength)));
-            const rayOrigin = cameraPos;
-
-            let pixel: Vector3 = vec3(0, 0, 0);
-            let hitSamples = 0;
-            
-            // spheres
-            for (let n: number = 0; n < samples; n++) {
-                const sample = trace(rayOrigin, rayDirection, [worldObjects.b, ...worldObjects.spheres], samples);
-                if (sample != null) {
-                    pixel = add(pixel, sample);
-                    hitSamples += 1;
-                }
-                //pixel = add(pixel, trace([0, 0, 0], rayDirection, worldObjects, 4));
-            };
-
-            if (hitSamples === 0) continue;
-
-            pixel = mul(pixel, 1/hitSamples);
-            const index = cpuPixelIndex(i, j, SCREEN_WIDTH);
-            pixels[index + 0] = toByte(pixel.x);
-            pixels[index + 1] = toByte(pixel.y);
-            pixels[index + 2] = toByte(pixel.z);
-            pixels[index + 3] = 255;
-        }
-    }
-};
-
-function cpuPipeline(
-    ctx: CanvasRenderingContext2D,
-    image: ImageData,
-    camera: Camera,
-    worldObjects: renderObjects,
-    wc: WorldConfig,
-): void {
-    cpuRenderRadientBG(image, wc);
-    cpuRenderGravityGrid(image, camera, wc);
-    cpuRenderRayTracing(ctx, image, camera, worldObjects, wc);
-    ctx.putImageData(image, 0, 0);
-}
-
-///////////////
-// CONSTANTS //
-///////////////
+import gpuPipelineShaderSource from "./gpuPipeline.wgsl";
+import { cameraForward, cameraRight, cameraUp, orbitCamera, rgb, vec3 } from "./common";
+import { cpuPipeline } from "./cpuPipeline";
+import { gpuGridVertices } from "./gpuGrid";
+import { handleCameraKeyArrows, handleCameraMouseDrag, handleCameraWheelZoom } from "./input";
+import type { BackgroundMode, BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjects } from "./types";
 
 const canvasElement = document.getElementById("blackhole-canvas");
 
 if (!(canvasElement instanceof HTMLCanvasElement)) throw new Error("Canvas element #blackhole-canvas was not found....");
 
 const canvas = canvasElement;
-const context = canvas.getContext("2d");
-
-if (context == null) throw new Error("2D canvas context could not be created....");
-
-const ctx = context as CanvasRenderingContext2D;
 
 const worldConf = {
     screenWidth: canvas.width,
@@ -725,10 +31,8 @@ const G = worldConf.g;
 const SAGITTARIUS_A_MASS = worldConf.sagittariusAMass;
 const WORLD_CENTER = worldConf.worldCenter;
 const SCHWARZSCHILD_RADIUS = 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2);
-
-// Scene distances below are stored in meters.
 const EVENT_HORIZON_RADIUS = SCHWARZSCHILD_RADIUS;
-const CAMERA_RADIUS = 7 * SCHWARZSCHILD_RADIUS;
+const CAMERA_RADIUS = 8 * SCHWARZSCHILD_RADIUS;
 
 const blackHole = {
     pos: WORLD_CENTER,
@@ -741,41 +45,160 @@ const blackHole = {
     roughness: 0,
 } satisfies BlackHole;
 
-
 const camera = {
     target: blackHole,
     radius: CAMERA_RADIUS,
     yaw: 0,
     pitch: 0,
-    focalLength: 600,
+    focalLength: 700,
 } satisfies Camera;
 
+const disc = {
+    pos: blackHole.pos,
+    innerRadius: 1.8 * SCHWARZSCHILD_RADIUS,
+    outerRadius: 2.7 * SCHWARZSCHILD_RADIUS,
+    visible: true,
+    noiseVisible: false,
+    noiseDensity: 0.1, // 0...1
+    nearColor: rgb(255, 102, 0),
+    farColor: rgb(255, 208, 18),
+    radialBoost: rgb(28, 6, 0),
+} satisfies Disc;
+
+const renderGeodesic = {
+    dλ: 5e7, // previously faster option was dλ: 1e8 and maxSteps 4096, but blackhole has weird noise outside vertically
+    maxSteps: 8192,
+    escapeRadiusMultiplier: 30,
+} satisfies renderObjects["renderGeodesic"];
+
+const grid = {
+    pos: vec3(
+        blackHole.pos.x,
+        blackHole.pos.y - 2.4 * SCHWARZSCHILD_RADIUS,
+        blackHole.pos.z,
+    ),
+    halfSize: 3.5 * SCHWARZSCHILD_RADIUS,
+    cellSize: 0.35 * SCHWARZSCHILD_RADIUS,
+    maxDrop: 2.5 * SCHWARZSCHILD_RADIUS,
+    lineColor: rgb(255, 255, 255),
+} satisfies Grid;
+
+const background = {
+    mode: "stars",
+    stars: {
+        densityPrimary: 0.023,
+        densitySecondary: 0.011,
+        baseColor: rgb(3, 4, 8),
+        milkyWayVisible: false,
+        milkyWayNormal: vec3(0.26, 0.9, -0.34),
+        milkyWayWidth: 0.17,
+        milkyWayIntensity: 0.42,
+        milkyWayColor: rgb(128, 112, 84),
+    },
+    gradient: {
+        topLeft: rgb(255, 48, 48),
+        topRight: rgb(255, 220, 0),
+        bottomLeft: rgb(24, 12, 120),
+        bottomRight: rgb(160, 0, 255),
+    },
+    empty: {
+        color: rgb(0, 0, 0),
+    },
+} satisfies renderObjects["background"];
+
 const worldObjects: renderObjects = {
-    b: blackHole,
+    background,
+    blackhole: blackHole,
+    disc,
+    renderGeodesic,
+    grid,
     spheres: [
         {
-            pos: vec3(-2.5 * SCHWARZSCHILD_RADIUS, 0, 0),
-            radius: 0.65 * SCHWARZSCHILD_RADIUS,
-            emission: rgb(255, 230, 140),
+            pos: vec3(-6.5 * SCHWARZSCHILD_RADIUS, 0, 4*SCHWARZSCHILD_RADIUS),
+            radius: 1.2 * SCHWARZSCHILD_RADIUS,
+            emission: rgb(196, 0, 0),
             reflectivity: rgb(0.25, 1, 0.76), // normalized 0..1 per channel
             roughness: 3,
         },
         {
-            pos: vec3(10.5 * SCHWARZSCHILD_RADIUS, 0, 0),
-            radius: 0.8 * SCHWARZSCHILD_RADIUS,
-            emission: rgb(255, 255, 0),
+            pos: vec3(-10.5 * SCHWARZSCHILD_RADIUS, 0, 7*SCHWARZSCHILD_RADIUS),
+            radius: 1.7 * SCHWARZSCHILD_RADIUS,
+            emission: rgb(115, 0, 255),
             reflectivity: rgb(0, 0, 0),
             roughness: 0,
+        },
+        {
+            pos: vec3(-9 * SCHWARZSCHILD_RADIUS, 0, -14*SCHWARZSCHILD_RADIUS),
+            radius: 1.7 * SCHWARZSCHILD_RADIUS,
+            emission: rgb(232, 213, 255),
+            reflectivity: rgb(1, 0, 1),
+            roughness: 10,
         },
     ],
 };
 
-const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
+const runtimeFlags = globalThis as typeof globalThis & {
+    runGeodesic?: boolean;
+    renderDisc?: boolean;
+    backgroundMode?: string;
+};
+runtimeFlags.runGeodesic = runtimeFlags.runGeodesic ?? false;
+runtimeFlags.renderDisc = runtimeFlags.renderDisc ?? true;
+runtimeFlags.backgroundMode = runtimeFlags.backgroundMode ?? worldObjects.background.mode;
+
+const gpuSceneData = new Float32Array(22 * 4);
+const GPU_SPHERE_FLOATS = 8;
+
+const fpsOverlay = document.createElement("div");
+fpsOverlay.style.position = "fixed";
+fpsOverlay.style.top = "8px";
+fpsOverlay.style.left = "8px";
+fpsOverlay.style.padding = "6px 8px";
+fpsOverlay.style.background = "rgba(0, 0, 0, 0.65)";
+fpsOverlay.style.color = "#ffffff";
+fpsOverlay.style.fontFamily = "monospace";
+fpsOverlay.style.fontSize = "12px";
+fpsOverlay.style.zIndex = "9999";
+fpsOverlay.textContent = "FPS: --";
+document.body.appendChild(fpsOverlay);
+
+let fpsFrames = 0;
+let fpsLastTime = performance.now();
+
+const reportFrame = (backend: string): void => {
+    fpsFrames += 1;
+    const now = performance.now();
+    const elapsed = now - fpsLastTime;
+
+    if (elapsed >= 1000) {
+        const fps = fpsFrames * 1000 / elapsed;
+        fpsOverlay.textContent = `FPS: ${fps.toFixed(1)} (${backend})`;
+        fpsFrames = 0;
+        fpsLastTime = now;
+    }
+};
+
+const gpuBackgroundModeValue = (mode: string | undefined): number => {
+    if (mode === "empty") return 0;
+    if (mode === "gradient") return 1;
+    return 2;
+};
+
+const runtimeBackgroundMode = (mode: string | undefined, fallback: BackgroundMode): BackgroundMode => {
+    if (mode === "empty" || mode === "gradient" || mode === "stars") {
+        return mode;
+    }
+    return fallback;
+};
+
 const mouseDrag: MouseDrag = {
     active: false,
     lastX: 0,
     lastY: 0,
 };
+
+const MIN_CAMERA_RADIUS = CAMERA_RADIUS / 1.2;
+const MAX_CAMERA_RADIUS = CAMERA_RADIUS * 2;
 
 window.addEventListener("keydown", (event) => {
     handleCameraKeyArrows(event, camera);
@@ -791,11 +214,383 @@ window.addEventListener("mousemove", (event) => {
     handleCameraMouseDrag(event, camera, mouseDrag);
 });
 
+canvas.addEventListener("wheel", (event) => {
+    handleCameraWheelZoom(event, camera, MIN_CAMERA_RADIUS, MAX_CAMERA_RADIUS);
+}, { passive: false });
+
 window.addEventListener("mouseup", () => {
     mouseDrag.active = false;
 });
 
-const FPS = 40;
-window.setInterval(() => {
-    cpuPipeline(ctx, image, camera, worldObjects, worldConf);
-}, 1000 / FPS);
+const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
+    const context = canvas.getContext("2d");
+
+    if (context == null) throw new Error("2D canvas context could not be created....");
+
+    const ctx = context as CanvasRenderingContext2D;
+    const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
+    const FPS = 30;
+
+    console.log("WebGPU unavailable. Defaulted to CPU pipeline renderer.");
+    console.log("CPU geodesic raytracing is OFF by default.");
+    console.log("Run `runGeodesic = true` in the console to enable it.");
+    console.log("Run `renderDisc = false` in the console to hide the disc.");
+    console.log('Run `backgroundMode = "gradient"` or `backgroundMode = "empty"` in the console to switch the background.');
+
+    window.setInterval(() => {
+        worldObjects.disc.visible = runtimeFlags.renderDisc ?? true;
+        worldObjects.background.mode = runtimeBackgroundMode(runtimeFlags.backgroundMode, worldObjects.background.mode);
+        cpuPipeline(ctx, image, camera, worldObjects, worldConf, runtimeFlags.runGeodesic ?? false);
+        //console.log("Completed CPU render cycle.");
+        reportFrame(runtimeFlags.runGeodesic ?? false ? "CPU geodesic" : "CPU");
+    }, 1000 / FPS);
+};
+
+const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> => {
+    try {
+        if (!navigator.gpu) return false;
+
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) return false;
+
+        const device = await adapter.requestDevice();
+        const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
+        if (!context) return false;
+
+        const format = navigator.gpu.getPreferredCanvasFormat();
+
+        context.configure({
+            device,
+            format,
+            alphaMode: "opaque",
+        });
+
+        const shader = device.createShaderModule({
+            code: gpuPipelineShaderSource,
+        });
+
+        const uniformBuffer = device.createBuffer({
+            size: gpuSceneData.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        let sphereBuffer = device.createBuffer({
+            size: Math.max(worldObjects.spheres.length * GPU_SPHERE_FLOATS * Float32Array.BYTES_PER_ELEMENT, 4 * Float32Array.BYTES_PER_ELEMENT),
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        let gridVertexBuffer = device.createBuffer({
+            size: 8,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        });
+
+        const sceneBindGroupLayout = device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: {
+                        type: "uniform",
+                    },
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: {
+                        type: "read-only-storage",
+                    },
+                },
+            ],
+        });
+
+        const scenePipelineLayout = device.createPipelineLayout({
+            bindGroupLayouts: [sceneBindGroupLayout],
+        });
+
+        const backgroundPipeline = device.createRenderPipeline({
+            layout: scenePipelineLayout,
+            vertex: {
+                module: shader,
+                entryPoint: "vsMain",
+            },
+            fragment: {
+                module: shader,
+                entryPoint: "backgroundFsMain",
+                targets: [{ format }],
+            },
+            primitive: {
+                topology: "triangle-list",
+            },
+        });
+
+        const pipeline = device.createRenderPipeline({
+            layout: scenePipelineLayout,
+            vertex: {
+                module: shader,
+                entryPoint: "vsMain",
+            },
+            fragment: {
+                module: shader,
+                entryPoint: "fsMain",
+                targets: [{ format }],
+            },
+            primitive: {
+                topology: "triangle-list",
+            },
+        });
+
+        const gridPipeline = device.createRenderPipeline({
+            layout: scenePipelineLayout,
+            vertex: {
+                module: shader,
+                entryPoint: "gridVsMain",
+                buffers: [
+                    {
+                        arrayStride: 8,
+                        attributes: [
+                            {
+                                shaderLocation: 0,
+                                offset: 0,
+                                format: "float32x2",
+                            },
+                        ],
+                    },
+                ],
+            },
+            fragment: {
+                module: shader,
+                entryPoint: "gridFsMain",
+                targets: [{ format }],
+            },
+            primitive: {
+                topology: "line-list",
+            },
+        });
+
+        let bindGroup = device.createBindGroup({
+            layout: sceneBindGroupLayout,
+            entries: [
+                {
+                    binding: 0,
+                    resource: {
+                        buffer: uniformBuffer,
+                    },
+                },
+                {
+                    binding: 1,
+                    resource: {
+                        buffer: sphereBuffer,
+                    },
+                },
+            ],
+        });
+
+        const frame = (): void => {
+            worldObjects.disc.visible = runtimeFlags.renderDisc ?? true;
+            worldObjects.background.mode = runtimeBackgroundMode(runtimeFlags.backgroundMode, worldObjects.background.mode);
+            const cameraPos = orbitCamera(camera);
+            const forward = cameraForward(cameraPos, camera);
+            const right = cameraRight(forward);
+            const up = cameraUp(forward, right);
+            const sphereData = new Float32Array(Math.max(worldObjects.spheres.length * GPU_SPHERE_FLOATS, 4));
+            const gridVertices = gpuGridVertices(camera, worldObjects, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+            for (let sphereIndex = 0; sphereIndex < worldObjects.spheres.length; sphereIndex++) {
+                const sphere = worldObjects.spheres[sphereIndex];
+                if (sphere == null) continue;
+                const base = sphereIndex * GPU_SPHERE_FLOATS;
+                sphereData.set([sphere.pos.x, sphere.pos.y, sphere.pos.z, sphere.radius], base);
+                sphereData.set([
+                    sphere.emission.r / 255,
+                    sphere.emission.g / 255,
+                    sphere.emission.b / 255,
+                    0,
+                ], base + 4);
+            }
+
+            if (sphereBuffer.size !== sphereData.byteLength) {
+                sphereBuffer = device.createBuffer({
+                    size: sphereData.byteLength,
+                    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+                });
+                bindGroup = device.createBindGroup({
+                    layout: sceneBindGroupLayout,
+                    entries: [
+                        {
+                            binding: 0,
+                            resource: {
+                                buffer: uniformBuffer,
+                            },
+                        },
+                        {
+                            binding: 1,
+                            resource: {
+                                buffer: sphereBuffer,
+                            },
+                        },
+                    ],
+                });
+            }
+
+            if (gridVertexBuffer.size !== gridVertices.byteLength && gridVertices.byteLength > 0) {
+                gridVertexBuffer = device.createBuffer({
+                    size: gridVertices.byteLength,
+                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+                });
+            }
+
+            gpuSceneData.set([cameraPos.x, cameraPos.y, cameraPos.z, 0], 0);
+            gpuSceneData.set([forward.x, forward.y, forward.z, 0], 4);
+            gpuSceneData.set([right.x, right.y, right.z, 0], 8);
+            gpuSceneData.set([up.x, up.y, up.z, 0], 12);
+            gpuSceneData.set([SCREEN_WIDTH, SCREEN_HEIGHT, camera.focalLength, worldObjects.spheres.length], 16);
+            gpuSceneData.set([blackHole.pos.x, blackHole.pos.y, blackHole.pos.z, blackHole.schwarzschildRadius], 20);
+            gpuSceneData.set([worldObjects.disc.pos.x, worldObjects.disc.pos.y, worldObjects.disc.pos.z, 0], 24);
+            gpuSceneData.set([
+                worldObjects.disc.innerRadius,
+                worldObjects.disc.outerRadius,
+                worldObjects.disc.visible ? 1 : 0,
+                worldObjects.disc.noiseVisible ? 1 : 0,
+            ], 28);
+            gpuSceneData.set([
+                worldObjects.disc.nearColor.r / 255,
+                worldObjects.disc.nearColor.g / 255,
+                worldObjects.disc.nearColor.b / 255,
+                0,
+            ], 32);
+            gpuSceneData.set([
+                worldObjects.disc.farColor.r / 255,
+                worldObjects.disc.farColor.g / 255,
+                worldObjects.disc.farColor.b / 255,
+                0,
+            ], 36);
+            gpuSceneData.set([
+                worldObjects.disc.radialBoost.r / 255,
+                worldObjects.disc.radialBoost.g / 255,
+                worldObjects.disc.radialBoost.b / 255,
+                worldObjects.disc.noiseDensity,
+            ], 40);
+            gpuSceneData.set([
+                worldObjects.grid.lineColor.r / 255,
+                worldObjects.grid.lineColor.g / 255,
+                worldObjects.grid.lineColor.b / 255,
+                0,
+            ], 44);
+            gpuSceneData.set([
+                gpuBackgroundModeValue(worldObjects.background.mode),
+                worldObjects.background.stars.densityPrimary,
+                worldObjects.background.stars.densitySecondary,
+                0,
+            ], 48);
+            gpuSceneData.set([
+                worldObjects.background.stars.baseColor.r / 255,
+                worldObjects.background.stars.baseColor.g / 255,
+                worldObjects.background.stars.baseColor.b / 255,
+                0,
+            ], 52);
+            gpuSceneData.set([
+                worldObjects.background.empty.color.r / 255,
+                worldObjects.background.empty.color.g / 255,
+                worldObjects.background.empty.color.b / 255,
+                0,
+            ], 56);
+            gpuSceneData.set([
+                worldObjects.background.gradient.topLeft.r / 255,
+                worldObjects.background.gradient.topLeft.g / 255,
+                worldObjects.background.gradient.topLeft.b / 255,
+                0,
+            ], 60);
+            gpuSceneData.set([
+                worldObjects.background.gradient.topRight.r / 255,
+                worldObjects.background.gradient.topRight.g / 255,
+                worldObjects.background.gradient.topRight.b / 255,
+                0,
+            ], 64);
+            gpuSceneData.set([
+                worldObjects.background.gradient.bottomLeft.r / 255,
+                worldObjects.background.gradient.bottomLeft.g / 255,
+                worldObjects.background.gradient.bottomLeft.b / 255,
+                0,
+            ], 68);
+            gpuSceneData.set([
+                worldObjects.background.gradient.bottomRight.r / 255,
+                worldObjects.background.gradient.bottomRight.g / 255,
+                worldObjects.background.gradient.bottomRight.b / 255,
+                0,
+            ], 72);
+            gpuSceneData.set([
+                worldObjects.background.stars.milkyWayNormal.x,
+                worldObjects.background.stars.milkyWayNormal.y,
+                worldObjects.background.stars.milkyWayNormal.z,
+                worldObjects.background.stars.milkyWayWidth,
+            ], 76);
+            gpuSceneData.set([
+                worldObjects.background.stars.milkyWayColor.r / 255,
+                worldObjects.background.stars.milkyWayColor.g / 255,
+                worldObjects.background.stars.milkyWayColor.b / 255,
+                worldObjects.background.stars.milkyWayVisible ? worldObjects.background.stars.milkyWayIntensity : 0,
+            ], 80);
+            gpuSceneData.set([
+                worldObjects.renderGeodesic.dλ,
+                worldObjects.renderGeodesic.maxSteps,
+                worldObjects.renderGeodesic.escapeRadiusMultiplier,
+                0,
+            ], 84);
+
+            device.queue.writeBuffer(uniformBuffer, 0, gpuSceneData);
+            device.queue.writeBuffer(sphereBuffer, 0, sphereData);
+            if (gridVertices.byteLength > 0) {
+                device.queue.writeBuffer(gridVertexBuffer, 0, gridVertices);
+            }
+
+            const encoder = device.createCommandEncoder();
+            const view = context.getCurrentTexture().createView();
+
+            const pass = encoder.beginRenderPass({
+                colorAttachments: [
+                    {
+                        view,
+                        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                        loadOp: "clear",
+                        storeOp: "store",
+                    },
+                ],
+            });
+
+            pass.setPipeline(backgroundPipeline);
+            pass.setBindGroup(0, bindGroup);
+            pass.draw(3);
+            if (gridVertices.length > 0) {
+                pass.setPipeline(gridPipeline);
+                pass.setBindGroup(0, bindGroup);
+                pass.setVertexBuffer(0, gridVertexBuffer);
+                pass.draw(gridVertices.length / 2);
+            }
+            pass.setPipeline(pipeline);
+            pass.setBindGroup(0, bindGroup);
+            pass.draw(3);
+            pass.end();
+
+            device.queue.submit([encoder.finish()]);
+            reportFrame("GPU");
+            requestAnimationFrame(frame);
+        };
+
+        console.log("WebGPU renderer active. GPU goes brbrbrbr....");
+        console.log('GPU background defaults to stars. Run `backgroundMode = "gradient"` or `backgroundMode = "empty"` in the console to switch it.');
+        //console.log("Completed GPU render cycle.");
+        requestAnimationFrame(frame);
+        return true;
+    } catch (error) {
+        console.error("WebGPU initialization failed -> falling back to CPU.", error);
+        return false;
+    }
+};
+
+const initRenderer = async (): Promise<void> => {
+    const webGpuStarted = await initWebGpuRenderer(canvas);
+
+    if (!webGpuStarted) {
+        initCpuRenderer(canvas);
+    }
+};
+
+void initRenderer();
