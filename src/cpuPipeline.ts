@@ -338,6 +338,8 @@ const cpuRenderGravityGrid = (
 ): void => {
     const blackhole = camera.target;
     const grid = worldObjects.grid;
+    if (!grid.visible) return;
+
     const baseY = grid.pos.y;
     const halfSize = grid.halfSize;
     const cellSize = grid.cellSize;

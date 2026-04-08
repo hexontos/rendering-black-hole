@@ -46,6 +46,7 @@ export type RenderGeodesic = {
 };
 
 export type Grid = {
+    visible: boolean;
     pos: Vector3;
     halfSize: number;
     cellSize: number;

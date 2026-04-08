@@ -499,6 +499,85 @@ fn segmentDiscIntersection(
     );
 }
 
+fn raySphereIntersection(
+    rayOrigin: vec3f,
+    rayDirection: vec3f,
+    center: vec3f,
+    radius: f32,
+    color: vec3f,
+    kind: u32,
+) -> Intersection {
+    let oc = rayOrigin - center;
+    let b = 2.0 * dot(oc, rayDirection);
+    let c = dot(oc, oc) - radius * radius;
+    let discriminant = b * b - 4.0 * c;
+
+    if (discriminant < 0.0) {
+        return emptyIntersection();
+    }
+
+    let sqrtDiscriminant = sqrt(discriminant);
+    let t1 = (-b - sqrtDiscriminant) * 0.5;
+    let t2 = (-b + sqrtDiscriminant) * 0.5;
+    var dist = 1e30;
+
+    if (t1 >= 0.0) {
+        dist = t1;
+    } else if (t2 >= 0.0) {
+        dist = t2;
+    }
+
+    if (dist == 1e30) {
+        return emptyIntersection();
+    }
+
+    let point = rayOrigin + rayDirection * dist;
+    let normal = normalize(point - center);
+    return Intersection(true, dist, point, normal, color, kind);
+}
+
+fn rayDiscIntersection(
+    rayOrigin: vec3f,
+    rayDirection: vec3f,
+) -> Intersection {
+    if (scene.discParams.z < 0.5) {
+        return emptyIntersection();
+    }
+
+    if (abs(rayDirection.y) < 1e-9) {
+        return emptyIntersection();
+    }
+
+    let t = (scene.discPos.y - rayOrigin.y) / rayDirection.y;
+    if (t <= 0.0) {
+        return emptyIntersection();
+    }
+
+    let point = rayOrigin + rayDirection * t;
+    let local = point - scene.discPos.xyz;
+    let radialDist = length(vec2f(local.x, local.z));
+    let innerRadius = scene.discParams.x;
+    let outerRadius = scene.discParams.y;
+    let innerEdgeBias = scene.blackhole.w * 0.1;
+
+    if (
+        radialDist < innerRadius + innerEdgeBias ||
+        radialDist > outerRadius ||
+        discNoiseHole(point)
+    ) {
+        return emptyIntersection();
+    }
+
+    return Intersection(
+        true,
+        t,
+        point,
+        vec3f(0.0, 1.0, 0.0),
+        sampleDisc(rayOrigin, point),
+        3u,
+    );
+}
+
 fn closestIntersection(current: Intersection, candidate: Intersection) -> Intersection {
     if (!candidate.collided) {
         return current;
@@ -507,6 +586,37 @@ fn closestIntersection(current: Intersection, candidate: Intersection) -> Inters
         return candidate;
     }
     return current;
+}
+
+fn traceStraight(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
+    let blackholePos = scene.blackhole.xyz;
+    let schwarzschildRadius = scene.blackhole.w;
+    let captureRadius = schwarzschildRadius * 1.035;
+    let sphereCount = u32(scene.screen.w);
+
+    var hit = emptyIntersection();
+    hit = closestIntersection(hit, raySphereIntersection(rayOrigin, rayDirection, blackholePos, captureRadius, vec3f(0.0), 1u));
+    for (var sphereIndex: u32 = 0u; sphereIndex < sphereCount; sphereIndex = sphereIndex + 1u) {
+        let sphere = spheres[sphereIndex];
+        hit = closestIntersection(
+            hit,
+            raySphereIntersection(
+                rayOrigin,
+                rayDirection,
+                sphere.posRadius.xyz,
+                sphere.posRadius.w,
+                sphere.emission.xyz,
+                2u,
+            ),
+        );
+    }
+    hit = closestIntersection(hit, rayDiscIntersection(rayOrigin, rayDirection));
+
+    if (!hit.collided) {
+        return TraceResult(false, vec3f(0.0));
+    }
+
+    return TraceResult(true, hit.color);
 }
 
 fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
@@ -606,7 +716,15 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
         scene.cameraForward.xyz * focalLength
     );
 
-    let result = traceGeodesic(scene.cameraPos.xyz, rayDirection);
+    let useGeodesic = scene.geodesicParams.w > 0.5;
+    var result = TraceResult(false, vec3f(0.0));
+
+    if (useGeodesic) {
+        result = traceGeodesic(scene.cameraPos.xyz, rayDirection);
+    } else {
+        result = traceStraight(scene.cameraPos.xyz, rayDirection);
+    }
+
     if (!result.hit) {
         discard;
     }

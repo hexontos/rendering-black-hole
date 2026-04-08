@@ -47,6 +47,8 @@ export const gpuGridVertices = (
     screenHeight: number,
 ): Float32Array => {
     const grid = worldObjects.grid;
+    if (!grid.visible) return new Float32Array();
+
     const baseY = grid.pos.y;
     const halfSize = grid.halfSize;
     const cellSize = grid.cellSize;

@@ -2,8 +2,51 @@ import gpuPipelineShaderSource from "./gpuPipeline.wgsl";
 import { cameraForward, cameraRight, cameraUp, orbitCamera, rgb, vec3 } from "./common";
 import { cpuPipeline } from "./cpuPipeline";
 import { gpuGridVertices } from "./gpuGrid";
-import { handleCameraKeyArrows, handleCameraMouseDrag, handleCameraWheelZoom } from "./input";
-import type { BackgroundMode, BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjects } from "./types";
+import {
+    handleCameraKeyArrows,
+    handleGeodesicToggleKey,
+    handleCameraMouseDrag,
+    handleCameraWheelZoom,
+    installConsoleCommands,
+} from "./input";
+import type { BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjects } from "./types";
+
+type AppMode = "main" | "sim2d" | "rayRender3d";
+type RenderPipeline = "cpu" | "gpu";
+
+const APP_MODE_NAME = "blackhole.appMode";
+const RENDER_PIPELINE_NAME = "blackhole.renderPipeline";
+
+const readAppMode = (): AppMode => {
+    const appMode = localStorage.getItem(APP_MODE_NAME);
+
+    if (appMode === "sim2d" || appMode === "rayRender3d" || appMode === "main") {
+        return appMode;
+    }
+
+    return "main";
+};
+
+const readRenderPipeline = (): RenderPipeline => {
+    const renderPipeline = localStorage.getItem(RENDER_PIPELINE_NAME);
+
+    if (renderPipeline === "cpu" || renderPipeline === "gpu") {
+        return renderPipeline;
+    }
+
+    return "gpu";
+};
+
+const reloadWithAppMode = (mode: AppMode): void => {
+    localStorage.setItem(APP_MODE_NAME, mode);
+    window.location.reload();
+};
+
+const reloadWithRenderPipeline = (renderPipeline: RenderPipeline): void => {
+    localStorage.setItem(APP_MODE_NAME, "main");
+    localStorage.setItem(RENDER_PIPELINE_NAME, renderPipeline);
+    window.location.reload();
+};
 
 const canvasElement = document.getElementById("blackhole-canvas");
 
@@ -66,12 +109,13 @@ const disc = {
 } satisfies Disc;
 
 const renderGeodesic = {
-    dλ: 5e7, // previously faster option was dλ: 1e8 and maxSteps 4096, but blackhole has weird noise outside vertically
+    dλ: 5e7,
     maxSteps: 8192,
     escapeRadiusMultiplier: 30,
 } satisfies renderObjects["renderGeodesic"];
 
 const grid = {
+    visible: true,
     pos: vec3(
         blackHole.pos.x,
         blackHole.pos.y - 2.4 * SCHWARZSCHILD_RADIUS,
@@ -121,15 +165,15 @@ const worldObjects: renderObjects = {
             roughness: 3,
         },
         {
-            pos: vec3(-10.5 * SCHWARZSCHILD_RADIUS, 0, 7*SCHWARZSCHILD_RADIUS),
+            pos: vec3(0, 0, 9*SCHWARZSCHILD_RADIUS),
             radius: 1.7 * SCHWARZSCHILD_RADIUS,
             emission: rgb(115, 0, 255),
             reflectivity: rgb(0, 0, 0),
             roughness: 0,
         },
         {
-            pos: vec3(-9 * SCHWARZSCHILD_RADIUS, 0, -14*SCHWARZSCHILD_RADIUS),
-            radius: 1.7 * SCHWARZSCHILD_RADIUS,
+            pos: vec3(-7 * SCHWARZSCHILD_RADIUS, 0.5 * SCHWARZSCHILD_RADIUS, -14*SCHWARZSCHILD_RADIUS),
+            radius: 2 * SCHWARZSCHILD_RADIUS,
             emission: rgb(232, 213, 255),
             reflectivity: rgb(1, 0, 1),
             roughness: 10,
@@ -137,14 +181,10 @@ const worldObjects: renderObjects = {
     ],
 };
 
-const runtimeFlags = globalThis as typeof globalThis & {
-    runGeodesic?: boolean;
-    renderDisc?: boolean;
-    backgroundMode?: string;
+const runtimeSettings = {
+    cpuRunGeodesic: true,
+    gpuRunGeodesic: true,
 };
-runtimeFlags.runGeodesic = runtimeFlags.runGeodesic ?? false;
-runtimeFlags.renderDisc = runtimeFlags.renderDisc ?? true;
-runtimeFlags.backgroundMode = runtimeFlags.backgroundMode ?? worldObjects.background.mode;
 
 const gpuSceneData = new Float32Array(22 * 4);
 const GPU_SPHERE_FLOATS = 8;
@@ -158,21 +198,22 @@ fpsOverlay.style.background = "rgba(0, 0, 0, 0.65)";
 fpsOverlay.style.color = "#ffffff";
 fpsOverlay.style.fontFamily = "monospace";
 fpsOverlay.style.fontSize = "12px";
+fpsOverlay.style.whiteSpace = "pre";
 fpsOverlay.style.zIndex = "9999";
-fpsOverlay.textContent = "FPS: --";
+fpsOverlay.textContent = "FPS: --\nRender: --\nComputation: --";
 document.body.appendChild(fpsOverlay);
 
 let fpsFrames = 0;
 let fpsLastTime = performance.now();
 
-const reportFrame = (backend: string): void => {
+const reportFrame = (render: string, computation: string): void => {
     fpsFrames += 1;
     const now = performance.now();
     const elapsed = now - fpsLastTime;
 
     if (elapsed >= 1000) {
         const fps = fpsFrames * 1000 / elapsed;
-        fpsOverlay.textContent = `FPS: ${fps.toFixed(1)} (${backend})`;
+        fpsOverlay.textContent = `FPS: ${fps.toFixed(1)}\nRender: ${render}\nComputation: ${computation}`;
         fpsFrames = 0;
         fpsLastTime = now;
     }
@@ -184,13 +225,6 @@ const gpuBackgroundModeValue = (mode: string | undefined): number => {
     return 2;
 };
 
-const runtimeBackgroundMode = (mode: string | undefined, fallback: BackgroundMode): BackgroundMode => {
-    if (mode === "empty" || mode === "gradient" || mode === "stars") {
-        return mode;
-    }
-    return fallback;
-};
-
 const mouseDrag: MouseDrag = {
     active: false,
     lastX: 0,
@@ -200,27 +234,30 @@ const mouseDrag: MouseDrag = {
 const MIN_CAMERA_RADIUS = CAMERA_RADIUS / 1.2;
 const MAX_CAMERA_RADIUS = CAMERA_RADIUS * 2;
 
-window.addEventListener("keydown", (event) => {
-    handleCameraKeyArrows(event, camera);
-});
+const installMainInputHandlers = (): void => {
+    window.addEventListener("keydown", (event) => {
+        handleCameraKeyArrows(event, camera);
+        handleGeodesicToggleKey(event, runtimeSettings);
+    });
 
-canvas.addEventListener("mousedown", (event) => {
-    mouseDrag.active = true;
-    mouseDrag.lastX = event.clientX;
-    mouseDrag.lastY = event.clientY;
-});
+    canvas.addEventListener("mousedown", (event) => {
+        mouseDrag.active = true;
+        mouseDrag.lastX = event.clientX;
+        mouseDrag.lastY = event.clientY;
+    });
 
-window.addEventListener("mousemove", (event) => {
-    handleCameraMouseDrag(event, camera, mouseDrag);
-});
+    window.addEventListener("mousemove", (event) => {
+        handleCameraMouseDrag(event, camera, mouseDrag);
+    });
 
-canvas.addEventListener("wheel", (event) => {
-    handleCameraWheelZoom(event, camera, MIN_CAMERA_RADIUS, MAX_CAMERA_RADIUS);
-}, { passive: false });
+    canvas.addEventListener("wheel", (event) => {
+        handleCameraWheelZoom(event, camera, MIN_CAMERA_RADIUS, MAX_CAMERA_RADIUS);
+    }, { passive: false });
 
-window.addEventListener("mouseup", () => {
-    mouseDrag.active = false;
-});
+    window.addEventListener("mouseup", () => {
+        mouseDrag.active = false;
+    });
+};
 
 const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
     const context = canvas.getContext("2d");
@@ -232,17 +269,13 @@ const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
     const FPS = 30;
 
     console.log("WebGPU unavailable. Defaulted to CPU pipeline renderer.");
-    console.log("CPU geodesic raytracing is OFF by default.");
-    console.log("Run `runGeodesic = true` in the console to enable it.");
-    console.log("Run `renderDisc = false` in the console to hide the disc.");
-    console.log('Run `backgroundMode = "gradient"` or `backgroundMode = "empty"` in the console to switch the background.');
+    console.log("Run `help()` in the console to see available commands.");
+    console.log("Press `q` to toggle Geodesic computation on or off.");
 
     window.setInterval(() => {
-        worldObjects.disc.visible = runtimeFlags.renderDisc ?? true;
-        worldObjects.background.mode = runtimeBackgroundMode(runtimeFlags.backgroundMode, worldObjects.background.mode);
-        cpuPipeline(ctx, image, camera, worldObjects, worldConf, runtimeFlags.runGeodesic ?? false);
+        cpuPipeline(ctx, image, camera, worldObjects, worldConf, runtimeSettings.cpuRunGeodesic);
         //console.log("Completed CPU render cycle.");
-        reportFrame(runtimeFlags.runGeodesic ?? false ? "CPU geodesic" : "CPU");
+        reportFrame("CPU", runtimeSettings.cpuRunGeodesic ? "Geodesic (Runge-Kutta)" : "Straight ray");
     }, 1000 / FPS);
 };
 
@@ -384,8 +417,6 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
         });
 
         const frame = (): void => {
-            worldObjects.disc.visible = runtimeFlags.renderDisc ?? true;
-            worldObjects.background.mode = runtimeBackgroundMode(runtimeFlags.backgroundMode, worldObjects.background.mode);
             const cameraPos = orbitCamera(camera);
             const forward = cameraForward(cameraPos, camera);
             const right = cameraRight(forward);
@@ -532,7 +563,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 worldObjects.renderGeodesic.dλ,
                 worldObjects.renderGeodesic.maxSteps,
                 worldObjects.renderGeodesic.escapeRadiusMultiplier,
-                0,
+                runtimeSettings.gpuRunGeodesic ? 1 : 0,
             ], 84);
 
             device.queue.writeBuffer(uniformBuffer, 0, gpuSceneData);
@@ -570,12 +601,13 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             pass.end();
 
             device.queue.submit([encoder.finish()]);
-            reportFrame("GPU");
+            reportFrame("GPU", runtimeSettings.gpuRunGeodesic ? "Geodesic (Runge-Kutta)" : "Straight ray");
             requestAnimationFrame(frame);
         };
 
         console.log("WebGPU renderer active. GPU goes brbrbrbr....");
-        console.log('GPU background defaults to stars. Run `backgroundMode = "gradient"` or `backgroundMode = "empty"` in the console to switch it.');
+        console.log("Run `help()` in the console to see available commands.");
+        console.log("Press `q` to toggle Geodesic computation on or off.");
         //console.log("Completed GPU render cycle.");
         requestAnimationFrame(frame);
         return true;
@@ -585,7 +617,64 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
     }
 };
 
-const initRenderer = async (): Promise<void> => {
+const installMainConsoleCommands = (): void => {
+    installConsoleCommands({
+        worldObjects,
+        setCpuGeodesic: (enabled) => {
+            runtimeSettings.cpuRunGeodesic = enabled;
+        },
+        setGpuGeodesic: (enabled) => {
+            runtimeSettings.gpuRunGeodesic = enabled;
+        },
+        runCpu: () => {
+            reloadWithRenderPipeline("cpu");
+        },
+        runGpu: () => {
+            reloadWithRenderPipeline("gpu");
+        },
+        runDemo: (demoName) => {
+            reloadWithAppMode(demoName);
+        },
+        runBlackholeSimulation: () => {
+            reloadWithAppMode("main");
+        },
+    });
+};
+
+const installDemoConsoleCommands = (): void => {
+    installConsoleCommands({
+        setCpuGeodesic: (_enabled) => {
+            console.error("CPU geodesic toggle is unavailable while a demo is running.");
+        },
+        setGpuGeodesic: (_enabled) => {
+            console.error("GPU geodesic toggle is unavailable while a demo is running.");
+        },
+        runCpu: () => {
+            reloadWithRenderPipeline("cpu");
+        },
+        runGpu: () => {
+            reloadWithRenderPipeline("gpu");
+        },
+        runDemo: (demoName) => {
+            reloadWithAppMode(demoName);
+        },
+        runBlackholeSimulation: () => {
+            reloadWithAppMode("main");
+        },
+    });
+};
+
+const bootMainSimulation = async (): Promise<void> => {
+    installMainInputHandlers();
+    installMainConsoleCommands();
+
+    const renderPipeline = readRenderPipeline();
+
+    if (renderPipeline === "cpu") {
+        initCpuRenderer(canvas);
+        return;
+    }
+
     const webGpuStarted = await initWebGpuRenderer(canvas);
 
     if (!webGpuStarted) {
@@ -593,4 +682,30 @@ const initRenderer = async (): Promise<void> => {
     }
 };
 
-void initRenderer();
+const bootDemo = async (appMode: AppMode): Promise<void> => {
+    if (appMode === "sim2d") {
+        await import("./demo/sim2d");
+        installDemoConsoleCommands();
+        console.log('2D geodesic demo active. Run `runBlackholeSimulation()` to return.');
+        return;
+    }
+
+    if (appMode === "rayRender3d") {
+        await import("./demo/rayRender3d");
+        installDemoConsoleCommands();
+        console.log('3D raytracing demo active. Run `runBlackholeSimulation()` to return.');
+    }
+};
+
+const bootApp = async (): Promise<void> => {
+    const appMode = readAppMode();
+
+    if (appMode !== "main") {
+        await bootDemo(appMode);
+        return;
+    }
+
+    await bootMainSimulation();
+};
+
+void bootApp();
