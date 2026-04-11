@@ -651,6 +651,23 @@ const fourthOrderRungeKutta = (ray: GeodesicRay, dλ: number, schwarzschildRadiu
     ray.dphi += (dλ / 6.0) * (k1[5] + 2 * k2[5] + 2 * k3[5] + k4[5]);
 };
 
+const fastGeodesicStep = (ray: GeodesicRay, dλ: number, schwarzschildRadius: SchwarzschildRadius): void => {
+    const rhs: SixStates = [0, 0, 0, 0, 0, 0];
+
+    computeGeodesicDerivatives(
+        { r: ray.r, theta: ray.theta, dr: ray.dr, dtheta: ray.dtheta, dphi: ray.dphi, E: ray.E },
+        schwarzschildRadius,
+        rhs,
+    );
+
+    ray.r += dλ * rhs[0];
+    ray.theta += dλ * rhs[1];
+    ray.phi += dλ * rhs[2];
+    ray.dr += dλ * rhs[3];
+    ray.dtheta += dλ * rhs[4];
+    ray.dphi += dλ * rhs[5];
+};
+
 const segmentSphereIntersection = (
     segmentStart: Vector3,
     segmentEnd: Vector3,
@@ -795,7 +812,11 @@ const traceGeodesic = (
     let previousWorldPoint = rayOrigin;
 
     for (let stepIndex = 0; stepIndex < maxGeodesicSteps; stepIndex++) {
-        fourthOrderRungeKutta(geodesicRay, dλ, blackhole.schwarzschildRadius);
+        if (worldObjects.renderGeodesic.useRungeKutta) {
+            fourthOrderRungeKutta(geodesicRay, dλ, blackhole.schwarzschildRadius);
+        } else {
+            fastGeodesicStep(geodesicRay, dλ, blackhole.schwarzschildRadius);
+        }
 
         if (!Number.isFinite(geodesicRay.r) || !Number.isFinite(geodesicRay.theta) || !Number.isFinite(geodesicRay.phi) || !Number.isFinite(geodesicRay.dr) || !Number.isFinite(geodesicRay.dtheta) || !Number.isFinite(geodesicRay.dphi)) {
             return vec3(0, 0, 0);

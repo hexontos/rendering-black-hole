@@ -112,6 +112,7 @@ const renderGeodesic = {
     dλ: 5e7,
     maxSteps: 8192,
     escapeRadiusMultiplier: 30,
+    useRungeKutta: false,
 } satisfies renderObjects["renderGeodesic"];
 
 const grid = {
@@ -186,7 +187,7 @@ const runtimeSettings = {
     gpuRunGeodesic: true,
 };
 
-const gpuSceneData = new Float32Array(22 * 4);
+const gpuSceneData = new Float32Array(23 * 4);
 const GPU_SPHERE_FLOATS = 8;
 
 const fpsOverlay = document.createElement("div");
@@ -213,10 +214,15 @@ const reportFrame = (render: string, computation: string): void => {
 
     if (elapsed >= 1000) {
         const fps = fpsFrames * 1000 / elapsed;
-        fpsOverlay.textContent = `FPS: ${fps.toFixed(1)}\nRender: ${render}\nComputation: ${computation}`;
+        fpsOverlay.textContent = `FPS: ${fps.toFixed(1)} (approx.)\nRender: ${render}\nComputation: ${computation}`;
         fpsFrames = 0;
         fpsLastTime = now;
     }
+};
+
+const currentComputationLabel = (runGeodesic: boolean): string => {
+    if (!runGeodesic) return "Straight ray";
+    return worldObjects.renderGeodesic.useRungeKutta ? "Geodesic (Runge-Kutta)" : "Geodesic (Fast)";
 };
 
 const gpuBackgroundModeValue = (mode: string | undefined): number => {
@@ -237,7 +243,7 @@ const MAX_CAMERA_RADIUS = CAMERA_RADIUS * 2;
 const installMainInputHandlers = (): void => {
     window.addEventListener("keydown", (event) => {
         handleCameraKeyArrows(event, camera);
-        handleGeodesicToggleKey(event, runtimeSettings);
+        handleGeodesicToggleKey(event, worldObjects.renderGeodesic);
     });
 
     canvas.addEventListener("mousedown", (event) => {
@@ -270,12 +276,12 @@ const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
 
     console.log("WebGPU unavailable. Defaulted to CPU pipeline renderer.");
     console.log("Run `help()` in the console to see available commands.");
-    console.log("Press `q` to toggle Geodesic computation on or off.");
+    console.log("Press `q` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
 
     window.setInterval(() => {
         cpuPipeline(ctx, image, camera, worldObjects, worldConf, runtimeSettings.cpuRunGeodesic);
         //console.log("Completed CPU render cycle.");
-        reportFrame("CPU", runtimeSettings.cpuRunGeodesic ? "Geodesic (Runge-Kutta)" : "Straight ray");
+        reportFrame("CPU", currentComputationLabel(runtimeSettings.cpuRunGeodesic));
     }, 1000 / FPS);
 };
 
@@ -565,6 +571,12 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 worldObjects.renderGeodesic.escapeRadiusMultiplier,
                 runtimeSettings.gpuRunGeodesic ? 1 : 0,
             ], 84);
+            gpuSceneData.set([
+                worldObjects.renderGeodesic.useRungeKutta ? 1 : 0,
+                0,
+                0,
+                0,
+            ], 88);
 
             device.queue.writeBuffer(uniformBuffer, 0, gpuSceneData);
             device.queue.writeBuffer(sphereBuffer, 0, sphereData);
@@ -601,13 +613,13 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             pass.end();
 
             device.queue.submit([encoder.finish()]);
-            reportFrame("GPU", runtimeSettings.gpuRunGeodesic ? "Geodesic (Runge-Kutta)" : "Straight ray");
+            reportFrame("GPU", currentComputationLabel(runtimeSettings.gpuRunGeodesic));
             requestAnimationFrame(frame);
         };
 
         console.log("WebGPU renderer active. GPU goes brbrbrbr....");
         console.log("Run `help()` in the console to see available commands.");
-        console.log("Press `q` to toggle Geodesic computation on or off.");
+        console.log("Press `q` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
         //console.log("Completed GPU render cycle.");
         requestAnimationFrame(frame);
         return true;

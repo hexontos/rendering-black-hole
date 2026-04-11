@@ -21,6 +21,7 @@ struct SceneUniforms {
     backgroundMilkyWayParams: vec4f,
     backgroundMilkyWayColor: vec4f,
     geodesicParams: vec4f,
+    geodesicComputationParams: vec4f,
 };
 
 struct Sphere {
@@ -332,6 +333,20 @@ fn fourthOrderRungeKutta(ray: GeodesicRay, dλ: f32, schwarzschildRadius: f32) -
     );
 }
 
+fn fastGeodesicStep(ray: GeodesicRay, dλ: f32, schwarzschildRadius: f32) -> GeodesicRay {
+    let rhs = computeGeodesicDerivatives(ray, schwarzschildRadius);
+
+    return GeodesicRay(
+        ray.r + dλ * rhs[0],
+        ray.theta + dλ * rhs[1],
+        ray.phi + dλ * rhs[2],
+        ray.dr + dλ * rhs[3],
+        ray.dtheta + dλ * rhs[4],
+        ray.dphi + dλ * rhs[5],
+        ray.E,
+    );
+}
+
 fn worldPoint(ray: GeodesicRay, blackholePos: vec3f) -> vec3f {
     let sinTheta = sin(ray.theta);
     let cosTheta = cos(ray.theta);
@@ -631,10 +646,15 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
     let dλ: f32 = scene.geodesicParams.x;
     let maxGeodesicSteps: u32 = u32(scene.geodesicParams.y);
     let escapeRadius: f32 = scene.geodesicParams.z * schwarzschildRadius;
+    let useRungeKutta = scene.geodesicComputationParams.x > 0.5;
     var previousWorldPoint = rayOrigin;
 
     for (var stepIndex: u32 = 0u; stepIndex < maxGeodesicSteps; stepIndex = stepIndex + 1u) {
-        geodesicRay = fourthOrderRungeKutta(geodesicRay, dλ, schwarzschildRadius);
+        if (useRungeKutta) {
+            geodesicRay = fourthOrderRungeKutta(geodesicRay, dλ, schwarzschildRadius);
+        } else {
+            geodesicRay = fastGeodesicStep(geodesicRay, dλ, schwarzschildRadius);
+        }
 
         if (invalidGeodesicRay(geodesicRay)) {
             return TraceResult(true, vec3f(0.0));

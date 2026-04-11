@@ -23,8 +23,7 @@ type ConsoleCommandContext = {
 };
 
 type GeodesicToggleState = {
-    cpuRunGeodesic: boolean;
-    gpuRunGeodesic: boolean;
+    useRungeKutta: boolean;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -321,10 +320,8 @@ export const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step
 export const handleGeodesicToggleKey = (event: KeyboardEvent, geodesicToggleState: GeodesicToggleState): void => {
     if (event.key.toLowerCase() !== "q") return;
 
-    const nextValue = !geodesicToggleState.cpuRunGeodesic;
-    geodesicToggleState.cpuRunGeodesic = nextValue;
-    geodesicToggleState.gpuRunGeodesic = nextValue;
-    console.log(`Geodesic computation set to ${nextValue}.`);
+    geodesicToggleState.useRungeKutta = !geodesicToggleState.useRungeKutta;
+    console.log(`Geodesic computation set to ${geodesicToggleState.useRungeKutta ? "Runge-Kutta" : "Fast"}.`);
     event.preventDefault();
 };
 
@@ -343,7 +340,7 @@ export const handleCameraMouseDrag = (
     mouseDrag.lastY = event.clientY;
 
     camera.yaw -= dx * sensitivity;
-    camera.pitch += dy * sensitivity;
+    camera.pitch -= dy * sensitivity;
 
     const pitchLimit = Math.PI * 0.5 - 0.01;
     camera.pitch = Math.max(-pitchLimit, Math.min(camera.pitch, pitchLimit));

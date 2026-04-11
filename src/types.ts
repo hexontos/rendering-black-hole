@@ -43,6 +43,7 @@ export type RenderGeodesic = {
     dλ: number;
     maxSteps: number;
     escapeRadiusMultiplier: number;
+    useRungeKutta: boolean;
 };
 
 export type Grid = {

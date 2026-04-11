@@ -2,7 +2,7 @@
   "name": "rendering-black-hole",
   "version": "1.0.0",
   "description": "Recreational Programming: Rendering Black Hole",
-  "main": "index.js",
+  "main": "src/main.ts",
   "scripts": {
     "build": "node esbuild.config.mjs",
     "dev": "npm run build & npm run watch & live-server . --watch='dist/*' --no-browser",
