@@ -66,6 +66,9 @@ struct TraceResult {
     color: vec3f,
 };
 
+const PI: f32 = 3.141592653589793;
+const POLE_SINGULARITY_THRESHOLD: f32 = 1e-4;
+
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 @group(0) @binding(1) var<storage, read> spheres: array<Sphere>;
 
@@ -130,7 +133,6 @@ fn hash22(p: vec2f) -> vec2f {
 }
 
 fn sampleStarField(direction: vec3f) -> vec3f {
-    let PI = 3.141592653589793;
     let skyUv = vec2f(
         atan2(direction.z, direction.x) / (2.0 * PI) + 0.5,
         acos(clamp(direction.y, -1.0, 1.0)) / PI,
@@ -234,6 +236,13 @@ fn sampleBackground(uv: vec2f, direction: vec3f) -> vec3f {
     }
 
     return sampleStarField(direction);
+}
+
+fn nearGeodesicCoordinateSingularity(ray: GeodesicRay) -> bool {
+    return
+        abs(sin(ray.theta)) < POLE_SINGULARITY_THRESHOLD ||
+        abs(ray.dtheta) > 1e5 ||
+        abs(ray.dphi) > 1e5;
 }
 
 fn sphericalBasis(theta: f32, phi: f32) -> SphericalBasis {
@@ -594,6 +603,10 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
     let baseRay = ray(localOrigin, rayDirection);
     var geodesicRay = gRay(baseRay, schwarzschildRadius);
 
+    if (nearGeodesicCoordinateSingularity(geodesicRay)) {
+        return traceStraight(rayOrigin, rayDirection);
+    }
+
     let dλ: f32 = scene.geodesicParams.x;
     let maxGeodesicSteps: u32 = u32(scene.geodesicParams.y);
     let escapeRadius: f32 = scene.geodesicParams.z * schwarzschildRadius;
@@ -607,8 +620,12 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
             geodesicRay = fastGeodesicStep(geodesicRay, dλ, schwarzschildRadius);
         }
 
+        if (nearGeodesicCoordinateSingularity(geodesicRay)) {
+            return traceStraight(rayOrigin, rayDirection);
+        }
+
         if (invalidGeodesicRay(geodesicRay)) {
-            return TraceResult(true, vec3f(0.0));
+            return traceStraight(rayOrigin, rayDirection);
         }
 
         if (geodesicRay.r <= captureRadius) {
