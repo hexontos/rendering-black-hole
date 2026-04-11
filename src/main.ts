@@ -29,6 +29,7 @@ const readAppMode = (): AppMode => {
 
 const readRenderPipeline = (): RenderPipeline => {
     const renderPipeline = localStorage.getItem(RENDER_PIPELINE_NAME);
+    localStorage.removeItem(RENDER_PIPELINE_NAME);
 
     if (renderPipeline === "cpu" || renderPipeline === "gpu") {
         return renderPipeline;
