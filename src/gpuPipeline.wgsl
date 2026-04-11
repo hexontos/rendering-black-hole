@@ -429,33 +429,6 @@ fn sampleDisc(_origin: vec3f, point: vec3f) -> vec3f {
     return clamp(radialColor + scene.discRadialBoost.xyz * innerT, vec3f(0.0), vec3f(1.0));
 }
 
-fn discNoiseHole(point: vec3f) -> bool {
-    if (scene.discParams.w < 0.5) {
-        return false;
-    }
-
-    let local = point - scene.discPos.xyz;
-    let radialDist = length(vec2f(local.x, local.z));
-    let radialT = clamp((radialDist - scene.discParams.x) / max(scene.discParams.y - scene.discParams.x, 1e-6), 0.0, 1.0);
-    let innerT = 1.0 - radialT;
-    let scale = max(scene.discParams.y * 0.55, 1e-6);
-    let noiseUv = vec2f(local.x, local.z) / scale * 42.0;
-    let cell = floor(noiseUv);
-    let seed = hash21(cell + vec2f(313.0, 191.0));
-    let noiseDensity = scene.discRadialBoost.w;
-
-    if (seed <= 1.0 - noiseDensity) {
-        return false;
-    }
-
-    let localCell = noiseUv - cell - vec2f(0.5);
-    let offset = (hash22(cell + vec2f(17.0, 59.0)) - vec2f(0.5)) * 0.65;
-    let dist = length(localCell - offset);
-    let radius = 0.08 + innerT * 0.1;
-
-    return dist < radius;
-}
-
 fn segmentDiscIntersection(
     segmentStart: vec3f,
     segmentEnd: vec3f,
@@ -485,8 +458,7 @@ fn segmentDiscIntersection(
 
     if (
         radialDist < innerRadius + innerEdgeBias ||
-        radialDist > outerRadius ||
-        discNoiseHole(point)
+        radialDist > outerRadius
     ) {
         return emptyIntersection();
     }
@@ -560,8 +532,7 @@ fn rayDiscIntersection(
 
     if (
         radialDist < innerRadius + innerEdgeBias ||
-        radialDist > outerRadius ||
-        discNoiseHole(point)
+        radialDist > outerRadius
     ) {
         return emptyIntersection();
     }

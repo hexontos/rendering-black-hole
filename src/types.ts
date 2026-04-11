@@ -30,8 +30,6 @@ export type Disc = {
     innerRadius: number;
     outerRadius: number;
     visible: boolean;
-    noiseVisible: boolean;
-    noiseDensity: number;
     nearColor: RGB;
     farColor: RGB;
     radialBoost: RGB;

@@ -164,8 +164,7 @@ const intersectDisc = (origin: Vector3, direction: Vector3, disc: Disc): PLANE_I
 
         if (
             radialDist >= disc.innerRadius &&
-            radialDist <= disc.outerRadius &&
-            !discNoiseHole(discPlane.point, disc)
+            radialDist <= disc.outerRadius
         ) {
             return discPlane;
         }
@@ -193,32 +192,6 @@ const sampleDisc = (_origin: Vector3, point: Vector3, disc: Disc): Vector3 => {
         radialColor.y + disc.radialBoost.g * innerT,
         radialColor.z + disc.radialBoost.b * innerT,
     );
-};
-
-const discNoiseHole = (point: Vector3, disc: Disc): boolean => {
-    if (!disc.noiseVisible) return false;
-
-    const local = sub(point, disc.pos);
-    const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
-    const radialT = Math.max(0, Math.min(1, (radialDist - disc.innerRadius) / (disc.outerRadius - disc.innerRadius)));
-    const innerT = 1 - radialT;
-    const scale = disc.outerRadius * 0.55;
-    const noiseX = local.x / Math.max(scale, 1e-9);
-    const noiseZ = local.z / Math.max(scale, 1e-9);
-    const cellX = Math.floor(noiseX * 42);
-    const cellZ = Math.floor(noiseZ * 42);
-    const seed = hash21(cellX + 313, cellZ + 191);
-
-    if (seed <= 1 - disc.noiseDensity) return false;
-
-    const localX = noiseX * 42 - cellX - 0.5;
-    const localZ = noiseZ * 42 - cellZ - 0.5;
-    const offsetX = (hash21(cellX + 17, cellZ + 59) - 0.5) * 0.65;
-    const offsetZ = (hash21(cellX + 63, cellZ + 12) - 0.5) * 0.65;
-    const dist = Math.hypot(localX - offsetX, localZ - offsetZ);
-    const radius = 0.08 + innerT * 0.1;
-
-    return dist < radius;
 };
 
 const traceBackgroundGrid = (_origin: Vector3, _direction: Vector3): Vector3 | null => {
@@ -748,8 +721,7 @@ const segmentDiscIntersection = (
 
     if (
         radialDist < disc.innerRadius + innerEdgeBias ||
-        radialDist > disc.outerRadius ||
-        discNoiseHole(point, disc)
+        radialDist > disc.outerRadius
     ) {
         return {
             collided: false,

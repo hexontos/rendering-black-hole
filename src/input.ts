@@ -1,10 +1,8 @@
 import type {
-    BackgroundMode,
     Camera,
     GradientBackground,
     MouseDrag,
     Sphere,
-    StarsBackground,
     Vector3,
     RGB,
     renderObjects,
@@ -15,10 +13,6 @@ export type DemoName = "sim2d" | "rayRender3d";
 type ConsoleCommandContext = {
     worldObjects?: renderObjects;
     requestRender: () => void;
-    setCpuGeodesic: (enabled: boolean) => void;
-    setGpuGeodesic: (enabled: boolean) => void;
-    runCpu: () => void;
-    runGpu: () => void;
     runDemo: (demoName: DemoName) => void;
     runBlackholeSimulation: () => void;
 };
@@ -27,20 +21,38 @@ type GeodesicToggleState = {
     useRungeKutta: boolean;
 };
 
+type SceneShortcutActions = {
+    toggleRenderPipeline: () => void;
+    toggleCanvasSize: () => void;
+    toggleSpheres: () => void;
+    toggleGeodesicEnabled: () => void;
+    toggleOverlayVisibility: () => void;
+};
+
+const cycleBackgroundShortcut = (worldObjects: renderObjects): void => {
+    const background = worldObjects.background;
+
+    if (background.mode !== "stars") {
+        background.mode = "stars";
+        background.stars.milkyWayVisible = false;
+        return;
+    }
+
+    if (!background.stars.milkyWayVisible) {
+        background.stars.milkyWayVisible = true;
+        return;
+    }
+
+    background.mode = "empty";
+    background.stars.milkyWayVisible = false;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> => {
     return typeof value === "object" && value !== null;
 };
 
 const isFiniteNumber = (value: unknown): value is number => {
     return typeof value === "number" && Number.isFinite(value);
-};
-
-const isBoolean = (value: unknown): value is boolean => {
-    return typeof value === "boolean";
-};
-
-const isBackgroundMode = (value: unknown): value is BackgroundMode => {
-    return value === "stars" || value === "gradient" || value === "empty";
 };
 
 const isRgb = (value: unknown): value is RGB => {
@@ -76,45 +88,28 @@ const isGradientBackground = (value: unknown): value is GradientBackground => {
     );
 };
 
-const isStarsBackground = (value: unknown): value is StarsBackground => {
-    if (!isRecord(value)) return false;
-
-    return (
-        isFiniteNumber(value.densityPrimary) &&
-        isFiniteNumber(value.densitySecondary) &&
-        isRgb(value.baseColor) &&
-        isBoolean(value.milkyWayVisible) &&
-        isVector3(value.milkyWayNormal) &&
-        isFiniteNumber(value.milkyWayWidth) &&
-        isFiniteNumber(value.milkyWayIntensity) &&
-        isRgb(value.milkyWayColor)
-    );
+const mainSimulationOnly = (commandName: string): void => {
+    console.error(`${commandName}() is only available in the main black hole simulation.`);
 };
 
-const mainSimulationOnly = (commandName: string): boolean => {
-    console.error(`${commandName}() is only available in the main black hole simulation.`);
-    return false;
+const mainWorldObjects = (context: ConsoleCommandContext, commandName: string): renderObjects | null => {
+    if (context.worldObjects == null) {
+        mainSimulationOnly(commandName);
+        return null;
+    }
+
+    return context.worldObjects;
 };
 
 const printHelp = (mainSimulationCommandsAvailable: boolean): void => {
     const mainSimulationSection = !mainSimulationCommandsAvailable
         ? "Main-simulation scene commands are unavailable while a demo is running."
-        : `- setBackgroundMode("stars" | "gradient" | "empty"): switch active background
-- setGradientBackground(background): replace the full colorful background object and activate it
-- setStarsBackground(background): replace the full star background object and activate it
-- setDiscVisible(boolean): show or hide the disc
-- setDiscNoiseVisible(boolean): enable or disable disc holes/noise
+        : `- setGradientBackground(background): replace the full colorful background object and activate it
 - setSpheres(sphere): append one sphere
 - setSpheres([sphere, ...]): replace the whole sphere list
-- setGridVisible(boolean): show or hide the gravity grid
-- setCpuGeodesic(boolean): enable or disable CPU Geodesic rendering
-- setGpuGeodesic(boolean): enable or disable GPU Geodesic rendering
 
 Gradient background shape:
 { topLeft: { r, g, b }, topRight: { r, g, b }, bottomLeft: { r, g, b }, bottomRight: { r, g, b } }
-
-Stars background shape:
-{ densityPrimary, densitySecondary, baseColor: { r, g, b }, milkyWayVisible, milkyWayNormal: { x, y, z }, milkyWayWidth, milkyWayIntensity, milkyWayColor: { r, g, b } }
 
 Sphere shape:
 { pos: { x, y, z }, radius, emission: { r, g, b } }
@@ -123,18 +118,9 @@ Examples:
 runDemo("sim2d")
 runDemo("rayRender3d")
 runBlackholeSimulation()
-runCpu()
-runGpu()
-setBackgroundMode("gradient")
 setGradientBackground({ topLeft: { r: 255, g: 48, b: 48 }, topRight: { r: 255, g: 220, b: 0 }, bottomLeft: { r: 24, g: 12, b: 120 }, bottomRight: { r: 160, g: 0, b: 255 } })
-setStarsBackground({ densityPrimary: 0.023, densitySecondary: 0.011, baseColor: { r: 3, g: 4, b: 8 }, milkyWayVisible: true, milkyWayNormal: { x: 0.26, y: 0.9, z: -0.34 }, milkyWayWidth: 0.17, milkyWayIntensity: 0.42, milkyWayColor: { r: 128, g: 112, b: 84 } })
 setSpheres({ pos: { x: -100, y: 0, z: 0 }, radius: 10, emission: { r: 255, g: 160, b: 0 } })
-setSpheres([{ pos: { x: -100, y: 0, z: 0 }, radius: 10, emission: { r: 255, g: 160, b: 0 } }])
-setDiscVisible(false)
-setDiscNoiseVisible(true)
-setGridVisible(false)
-setCpuGeodesic(false)
-setGpuGeodesic(false)`;
+setSpheres([{ pos: { x: -100, y: 0, z: 0 }, radius: 10, emission: { r: 255, g: 160, b: 0 } }])`;
 
     console.log(
 `Black hole simulation console commands:
@@ -142,8 +128,6 @@ setGpuGeodesic(false)`;
 - runDemo("sim2d"): switch to the 2D geodesic demo
 - runDemo("rayRender3d"): switch to the 3D straight-ray demo
 - runBlackholeSimulation(): switch back to the main black hole simulation
-- runCpu(): switch main simulation render pipeline to CPU
-- runGpu(): switch main simulation render pipeline to GPU
 
 ${mainSimulationSection}`,
     );
@@ -170,78 +154,22 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
         context.runBlackholeSimulation();
     };
 
-    target.runCpu = () => {
-        context.runCpu();
-    };
-
-    target.runGpu = () => {
-        context.runGpu();
-    };
-
-    target.setBackgroundMode = (mode: unknown) => {
-        if (context.worldObjects == null) return mainSimulationOnly("setBackgroundMode");
-        if (!isBackgroundMode(mode)) {
-            console.error('setBackgroundMode() expects "stars", "gradient", or "empty".');
-            return;
-        }
-
-        context.worldObjects.background.mode = mode;
-        console.log(`Background mode set to "${mode}".`);
-        context.requestRender();
-    };
-
     target.setGradientBackground = (gradientBackground: unknown) => {
-        if (context.worldObjects == null) return mainSimulationOnly("setGradientBackground");
+        const worldObjects = mainWorldObjects(context, "setGradientBackground");
+        if (worldObjects == null) return;
         if (!isGradientBackground(gradientBackground)) {
             console.error("setGradientBackground() expects a full gradient background object.");
             return;
         }
 
-        context.worldObjects.background.gradient = gradientBackground;
-        context.worldObjects.background.mode = "gradient";
-        console.log("Gradient background updated and activated.");
-        context.requestRender();
-    };
-
-    target.setStarsBackground = (starsBackground: unknown) => {
-        if (context.worldObjects == null) return mainSimulationOnly("setStarsBackground");
-        if (!isStarsBackground(starsBackground)) {
-            console.error("setStarsBackground() expects a full stars background object.");
-            return;
-        }
-
-        context.worldObjects.background.stars = starsBackground;
-        context.worldObjects.background.mode = "stars";
-        console.log("Stars background updated and activated.");
-        context.requestRender();
-    };
-
-    target.setDiscVisible = (visible: unknown) => {
-        if (context.worldObjects == null) return mainSimulationOnly("setDiscVisible");
-        if (!isBoolean(visible)) {
-            console.error("setDiscVisible() expects a boolean.");
-            return;
-        }
-
-        context.worldObjects.disc.visible = visible;
-        console.log(`Disc visibility set to ${visible}.`);
-        context.requestRender();
-    };
-
-    target.setDiscNoiseVisible = (visible: unknown) => {
-        if (context.worldObjects == null) return mainSimulationOnly("setDiscNoiseVisible");
-        if (!isBoolean(visible)) {
-            console.error("setDiscNoiseVisible() expects a boolean.");
-            return;
-        }
-
-        context.worldObjects.disc.noiseVisible = visible;
-        console.log(`Disc noise visibility set to ${visible}.`);
+        worldObjects.background.gradient = gradientBackground;
+        worldObjects.background.mode = "gradient";
         context.requestRender();
     };
 
     target.setSpheres = (nextSpheres: unknown) => {
-        if (context.worldObjects == null) return mainSimulationOnly("setSpheres");
+        const worldObjects = mainWorldObjects(context, "setSpheres");
+        if (worldObjects == null) return;
 
         if (Array.isArray(nextSpheres)) {
             if (!nextSpheres.every(isSphere)) {
@@ -249,8 +177,7 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
                 return;
             }
 
-            context.worldObjects.spheres = nextSpheres;
-            console.log(`Sphere list replaced with ${nextSpheres.length} sphere(s).`);
+            worldObjects.spheres = nextSpheres;
             context.requestRender();
             return;
         }
@@ -260,85 +187,94 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
             return;
         }
 
-        context.worldObjects.spheres.push(nextSpheres);
-        console.log(`Sphere appended. Total spheres: ${context.worldObjects.spheres.length}.`);
-        context.requestRender();
-    };
-
-    target.setGridVisible = (visible: unknown) => {
-        if (context.worldObjects == null) return mainSimulationOnly("setGridVisible");
-        if (!isBoolean(visible)) {
-            console.error("setGridVisible() expects a boolean.");
-            return;
-        }
-
-        context.worldObjects.grid.visible = visible;
-        console.log(`Grid visibility set to ${visible}.`);
-        context.requestRender();
-    };
-
-    target.setCpuGeodesic = (enabled: unknown) => {
-        if (!isBoolean(enabled)) {
-            console.error("setCpuGeodesic() expects a boolean.");
-            return;
-        }
-
-        context.setCpuGeodesic(enabled);
-        console.log(`CPU geodesic rendering set to ${enabled}.`);
-        context.requestRender();
-    };
-
-    target.setGpuGeodesic = (enabled: unknown) => {
-        if (!isBoolean(enabled)) {
-            console.error("setGpuGeodesic() expects a boolean.");
-            return;
-        }
-
-        context.setGpuGeodesic(enabled);
-        console.log(`GPU geodesic rendering set to ${enabled}.`);
+        worldObjects.spheres.push(nextSpheres);
         context.requestRender();
     };
 };
 
-export const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step: number = 0.1): boolean => {
+export const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step: number = 0.05): boolean => {
     const pitchLimit = Math.PI * 0.5 - 0.01;
 
-    if (event.key === "ArrowLeft") {
-        camera.yaw += step;
-        event.preventDefault();
-        return true;
-    };
-
-    if (event.key === "ArrowRight") {
-        camera.yaw -= step;
-        event.preventDefault();
-        return true;
-    };
-
-    if (event.key === "ArrowUp") {
-        camera.pitch += step;
-        camera.pitch = Math.min(camera.pitch, pitchLimit);
-        event.preventDefault();
-        return true;
+    switch (event.key) {
+        case "ArrowLeft":
+            camera.yaw += step;
+            event.preventDefault();
+            return true;
+        case "ArrowRight":
+            camera.yaw -= step;
+            event.preventDefault();
+            return true;
+        case "ArrowUp":
+            camera.pitch += step;
+            camera.pitch = Math.min(camera.pitch, pitchLimit);
+            event.preventDefault();
+            return true;
+        case "ArrowDown":
+            camera.pitch -= step;
+            camera.pitch = Math.max(camera.pitch, -pitchLimit);
+            event.preventDefault();
+            return true;
+        default:
+            return false;
     }
-
-    if (event.key === "ArrowDown") {
-        camera.pitch -= step;
-        camera.pitch = Math.max(camera.pitch, -pitchLimit);
-        event.preventDefault();
-        return true;
-    }
-
-    return false;
-}
+};
 
 export const handleGeodesicToggleKey = (event: KeyboardEvent, geodesicToggleState: GeodesicToggleState): boolean => {
-    if (event.key.toLowerCase() !== "q") return false;
+    if (event.key !== "1") return false;
 
     geodesicToggleState.useRungeKutta = !geodesicToggleState.useRungeKutta;
-    console.log(`Geodesic computation set to ${geodesicToggleState.useRungeKutta ? "Runge-Kutta" : "Fast"}.`);
     event.preventDefault();
     return true;
+};
+
+export const handleSceneToggleKeys = (
+    event: KeyboardEvent,
+    worldObjects: renderObjects,
+    actions: SceneShortcutActions,
+): boolean => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return false;
+
+    switch (event.key) {
+        case "2":
+            worldObjects.disc.visible = !worldObjects.disc.visible;
+            event.preventDefault();
+            return true;
+        case "3":
+            worldObjects.grid.visible = !worldObjects.grid.visible;
+            event.preventDefault();
+            return true;
+        case "4":
+            actions.toggleSpheres();
+            event.preventDefault();
+            return true;
+        case "5":
+            cycleBackgroundShortcut(worldObjects);
+            event.preventDefault();
+            return true;
+        case "6":
+            worldObjects.background.mode = "gradient";
+            worldObjects.background.stars.milkyWayVisible = false;
+            event.preventDefault();
+            return true;
+        case "7":
+            actions.toggleGeodesicEnabled();
+            event.preventDefault();
+            return true;
+        case "8":
+            actions.toggleCanvasSize();
+            event.preventDefault();
+            return true;
+        case "9":
+            actions.toggleRenderPipeline();
+            event.preventDefault();
+            return true;
+        case "0":
+            actions.toggleOverlayVisibility();
+            event.preventDefault();
+            return true;
+        default:
+            return false;
+    }
 };
 
 export const handleCameraMouseDrag = (

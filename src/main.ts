@@ -2,10 +2,12 @@ import gpuPipelineShaderSource from "./gpuPipeline.wgsl";
 import { cameraForward, cameraRight, cameraUp, orbitCamera, rgb, vec3 } from "./common";
 import { cpuPipeline } from "./cpuPipeline";
 import { gpuGridVertices } from "./gpuGrid";
+import { createHintPanel } from "./hintPanel";
 import {
     handleCameraKeyArrows,
     handleGeodesicToggleKey,
     handleCameraMouseDrag,
+    handleSceneToggleKeys,
     handleCameraWheelZoom,
     installConsoleCommands,
 } from "./input";
@@ -16,6 +18,14 @@ type RenderPipeline = "cpu" | "gpu";
 
 const APP_MODE_NAME = "blackhole.appMode";
 const RENDER_PIPELINE_NAME = "blackhole.renderPipeline";
+const CANVAS_DISPLAY_MODE_NAME = "blackhole.canvasDisplayMode";
+const OVERLAY_VISIBILITY_NAME = "blackhole.overlayVisibility";
+
+const readAndClearStorageValue = (storage: Storage, name: string): string | null => {
+    const value = storage.getItem(name);
+    storage.removeItem(name);
+    return value;
+};
 
 const readAppMode = (): AppMode => {
     const appMode = localStorage.getItem(APP_MODE_NAME);
@@ -28,8 +38,7 @@ const readAppMode = (): AppMode => {
 };
 
 const readRenderPipeline = (): RenderPipeline => {
-    const renderPipeline = localStorage.getItem(RENDER_PIPELINE_NAME);
-    localStorage.removeItem(RENDER_PIPELINE_NAME);
+    const renderPipeline = readAndClearStorageValue(localStorage, RENDER_PIPELINE_NAME);
 
     if (renderPipeline === "cpu" || renderPipeline === "gpu") {
         return renderPipeline;
@@ -43,9 +52,41 @@ const reloadWithAppMode = (mode: AppMode): void => {
     window.location.reload();
 };
 
-const reloadWithRenderPipeline = (renderPipeline: RenderPipeline): void => {
+const readOverlayVisibility = (): boolean => {
+    const storedOverlayVisibility = readAndClearStorageValue(sessionStorage, OVERLAY_VISIBILITY_NAME);
+
+    return storedOverlayVisibility !== "hidden";
+};
+
+const prepareOverlayReloadVisibility = (visible: boolean): void => {
+    if (!visible) {
+        sessionStorage.setItem(OVERLAY_VISIBILITY_NAME, "hidden");
+        return;
+    }
+
+    sessionStorage.removeItem(OVERLAY_VISIBILITY_NAME);
+};
+
+const reloadWithRenderPipeline = (renderPipeline: RenderPipeline, overlayVisible: boolean): void => {
+    prepareOverlayReloadVisibility(overlayVisible);
     localStorage.setItem(APP_MODE_NAME, "main");
     localStorage.setItem(RENDER_PIPELINE_NAME, renderPipeline);
+    window.location.reload();
+};
+
+const readCanvasDisplayMode = (): "default" | "fullscreen" => {
+    const storedDisplayMode = readAndClearStorageValue(sessionStorage, CANVAS_DISPLAY_MODE_NAME);
+
+    if (storedDisplayMode === "fullscreen") {
+        return "fullscreen";
+    }
+
+    return "default";
+};
+
+const reloadWithCanvasDisplayMode = (displayMode: "default" | "fullscreen", overlayVisible: boolean): void => {
+    prepareOverlayReloadVisibility(overlayVisible);
+    sessionStorage.setItem(CANVAS_DISPLAY_MODE_NAME, displayMode);
     window.location.reload();
 };
 
@@ -54,8 +95,11 @@ const canvasElement = document.getElementById("blackhole-canvas");
 if (!(canvasElement instanceof HTMLCanvasElement)) throw new Error("Canvas element #blackhole-canvas was not found....");
 
 const canvas = canvasElement;
-const DISPLAY_WIDTH = canvas.width;
-const DISPLAY_HEIGHT = canvas.height;
+const DEFAULT_DISPLAY_WIDTH = canvas.width;
+const DEFAULT_DISPLAY_HEIGHT = canvas.height;
+const CANVAS_DISPLAY_MODE = readCanvasDisplayMode();
+const DISPLAY_WIDTH = CANVAS_DISPLAY_MODE === "fullscreen" ? Math.max(1, Math.floor(window.innerWidth)) : DEFAULT_DISPLAY_WIDTH;
+const DISPLAY_HEIGHT = CANVAS_DISPLAY_MODE === "fullscreen" ? Math.max(1, Math.floor(window.innerHeight)) : DEFAULT_DISPLAY_HEIGHT;
 const RENDER_SCALE = 0.45;
 
 canvas.style.width = `${DISPLAY_WIDTH}px`;
@@ -114,8 +158,6 @@ const disc = {
     innerRadius: 1.8 * SCHWARZSCHILD_RADIUS,
     outerRadius: 2.9 * SCHWARZSCHILD_RADIUS,
     visible: true,
-    noiseVisible: false,
-    noiseDensity: 0.1, // 0...1
     nearColor: rgb(255, 102, 0),
     farColor: rgb(255, 208, 18),
     radialBoost: rgb(28, 6, 0),
@@ -173,7 +215,7 @@ const worldObjects: renderObjects = {
     spheres: [
         {
             pos: vec3(-6.5 * SCHWARZSCHILD_RADIUS, 0, 4*SCHWARZSCHILD_RADIUS),
-            radius: 1.2 * SCHWARZSCHILD_RADIUS,
+            radius: 0.5 * SCHWARZSCHILD_RADIUS,
             emission: rgb(196, 0, 0),
         },
         {
@@ -182,8 +224,8 @@ const worldObjects: renderObjects = {
             emission: rgb(115, 0, 255),
         },
         {
-            pos: vec3(-7 * SCHWARZSCHILD_RADIUS, 0.5 * SCHWARZSCHILD_RADIUS, -14*SCHWARZSCHILD_RADIUS),
-            radius: 2 * SCHWARZSCHILD_RADIUS,
+            pos: vec3(-20 * SCHWARZSCHILD_RADIUS, 4 * SCHWARZSCHILD_RADIUS, -14*SCHWARZSCHILD_RADIUS),
+            radius: 3 * SCHWARZSCHILD_RADIUS,
             emission: rgb(232, 213, 255),
         },
     ],
@@ -193,6 +235,8 @@ const runtimeSettings = {
     cpuRunGeodesic: true,
     gpuRunGeodesic: true,
 };
+let activeRenderPipeline: RenderPipeline = "gpu";
+let hiddenSpheres: renderObjects["spheres"] | null = null;
 
 const gpuSceneData = new Float32Array(23 * 4);
 const GPU_SPHERE_FLOATS = 8;
@@ -210,6 +254,8 @@ fpsOverlay.style.whiteSpace = "pre";
 fpsOverlay.style.zIndex = "9999";
 fpsOverlay.textContent = "FPS: --\nRender: --\nComputation: --";
 document.body.appendChild(fpsOverlay);
+let overlayVisible = readOverlayVisibility();
+const hintPanel = createHintPanel(fpsOverlay);
 
 let fpsFrames = 0;
 let fpsLastTime = performance.now();
@@ -263,12 +309,62 @@ let requestMainRender = (): void => {};
 const MIN_CAMERA_RADIUS = CAMERA_RADIUS / MIN_CAMERA_RADIUS_DIVISOR;
 const MAX_CAMERA_RADIUS = CAMERA_RADIUS * MAX_CAMERA_RADIUS_MULTIPLIER;
 
+const applyOverlayVisibility = (visible: boolean): void => {
+    overlayVisible = visible;
+    fpsOverlay.style.display = overlayVisible ? "block" : "none";
+    hintPanel.setOverlayVisible(overlayVisible);
+};
+
+applyOverlayVisibility(overlayVisible);
+
+const toggleSphereVisibility = (): void => {
+    if (hiddenSpheres == null) {
+        hiddenSpheres = worldObjects.spheres;
+        worldObjects.spheres = [
+            {
+                pos: vec3(0, 0, 0),
+                radius: 0,
+                emission: rgb(0, 0, 0),
+            },
+        ];
+        return;
+    }
+
+    worldObjects.spheres = hiddenSpheres;
+    hiddenSpheres = null;
+};
+
+const toggleGeodesicEnabled = (): void => {
+    const nextRunGeodesic = !runtimeSettings.cpuRunGeodesic;
+    runtimeSettings.cpuRunGeodesic = nextRunGeodesic;
+    runtimeSettings.gpuRunGeodesic = nextRunGeodesic;
+};
+
+const toggleCanvasDisplayMode = (): void => {
+    reloadWithCanvasDisplayMode(CANVAS_DISPLAY_MODE === "default" ? "fullscreen" : "default", overlayVisible);
+};
+
+const toggleRenderPipeline = (): void => {
+    reloadWithRenderPipeline(activeRenderPipeline === "gpu" ? "cpu" : "gpu", overlayVisible);
+};
+
+const toggleOverlayVisibility = (): void => {
+    applyOverlayVisibility(!overlayVisible);
+};
+
 const installMainInputHandlers = (): void => {
     window.addEventListener("keydown", (event) => {
         const cameraChanged = handleCameraKeyArrows(event, camera);
         const computationChanged = handleGeodesicToggleKey(event, worldObjects.renderGeodesic);
+        const sceneChanged = handleSceneToggleKeys(event, worldObjects, {
+            toggleRenderPipeline,
+            toggleCanvasSize: toggleCanvasDisplayMode,
+            toggleSpheres: toggleSphereVisibility,
+            toggleGeodesicEnabled,
+            toggleOverlayVisibility,
+        });
 
-        if (cameraChanged || computationChanged) {
+        if (cameraChanged || computationChanged || sceneChanged) {
             requestMainRender();
         }
     });
@@ -297,6 +393,7 @@ const installMainInputHandlers = (): void => {
 };
 
 const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
+    activeRenderPipeline = "cpu";
     const context = canvas.getContext("2d");
 
     if (context == null) throw new Error("2D canvas context could not be created....");
@@ -307,7 +404,7 @@ const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
 
     console.log("WebGPU unavailable. Defaulted to CPU pipeline renderer.");
     console.log("Run `help()` in the console to see available commands.");
-    console.log("Press `q` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
+    console.log("Press `1` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
 
     const renderFrame = (): void => {
         renderQueued = false;
@@ -326,6 +423,7 @@ const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
 
 const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> => {
     try {
+        activeRenderPipeline = "gpu";
         if (!navigator.gpu) return false;
 
         const adapter = await navigator.gpu.requestAdapter();
@@ -528,7 +626,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 renderWorldObjects.disc.innerRadius,
                 renderWorldObjects.disc.outerRadius,
                 renderWorldObjects.disc.visible ? 1 : 0,
-                renderWorldObjects.disc.noiseVisible ? 1 : 0,
+                0,
             ], 28);
             gpuSceneData.set([
                 renderWorldObjects.disc.nearColor.r / 255,
@@ -546,7 +644,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 renderWorldObjects.disc.radialBoost.r / 255,
                 renderWorldObjects.disc.radialBoost.g / 255,
                 renderWorldObjects.disc.radialBoost.b / 255,
-                renderWorldObjects.disc.noiseDensity,
+                0,
             ], 40);
             gpuSceneData.set([renderWorldObjects.grid.lineColor.r / 255, renderWorldObjects.grid.lineColor.g / 255, renderWorldObjects.grid.lineColor.b / 255, 0], 44);
             gpuSceneData.set([
@@ -662,7 +760,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
 
         console.log("WebGPU renderer active. GPU goes brbrbrbr....");
         console.log("Run `help()` in the console to see available commands.");
-        console.log("Press `q` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
+        console.log("Press `1` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
         requestMainRender();
         return true;
     } catch (error) {
@@ -671,60 +769,22 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
     }
 };
 
-const installMainConsoleCommands = (): void => {
+const installAppConsoleCommands = (mainSimulationWorldObjects?: renderObjects, requestRender: () => void = () => {}): void => {
     installConsoleCommands({
-        worldObjects,
-        requestRender: () => {
-            requestMainRender();
-        },
-        setCpuGeodesic: (enabled) => {
-            runtimeSettings.cpuRunGeodesic = enabled;
-        },
-        setGpuGeodesic: (enabled) => {
-            runtimeSettings.gpuRunGeodesic = enabled;
-        },
-        runCpu: () => {
-            reloadWithRenderPipeline("cpu");
-        },
-        runGpu: () => {
-            reloadWithRenderPipeline("gpu");
-        },
+        requestRender,
         runDemo: (demoName) => {
             reloadWithAppMode(demoName);
         },
         runBlackholeSimulation: () => {
             reloadWithAppMode("main");
         },
-    });
-};
-
-const installDemoConsoleCommands = (): void => {
-    installConsoleCommands({
-        requestRender: () => {},
-        setCpuGeodesic: (_enabled) => {
-            console.error("CPU geodesic toggle is unavailable while a demo is running.");
-        },
-        setGpuGeodesic: (_enabled) => {
-            console.error("GPU geodesic toggle is unavailable while a demo is running.");
-        },
-        runCpu: () => {
-            reloadWithRenderPipeline("cpu");
-        },
-        runGpu: () => {
-            reloadWithRenderPipeline("gpu");
-        },
-        runDemo: (demoName) => {
-            reloadWithAppMode(demoName);
-        },
-        runBlackholeSimulation: () => {
-            reloadWithAppMode("main");
-        },
+        ...(mainSimulationWorldObjects == null ? {} : { worldObjects: mainSimulationWorldObjects }),
     });
 };
 
 const bootMainSimulation = async (): Promise<void> => {
     installMainInputHandlers();
-    installMainConsoleCommands();
+    installAppConsoleCommands(worldObjects, requestMainRender);
 
     const renderPipeline = readRenderPipeline();
 
@@ -743,14 +803,14 @@ const bootMainSimulation = async (): Promise<void> => {
 const bootDemo = async (appMode: AppMode): Promise<void> => {
     if (appMode === "sim2d") {
         await import("./demo/sim2d");
-        installDemoConsoleCommands();
+        installAppConsoleCommands();
         console.log('2D geodesic demo active. Run `runBlackholeSimulation()` to return.');
         return;
     }
 
     if (appMode === "rayRender3d") {
         await import("./demo/rayRender3d");
-        installDemoConsoleCommands();
+        installAppConsoleCommands();
         console.log('3D raytracing demo active. Run `runBlackholeSimulation()` to return.');
     }
 };
