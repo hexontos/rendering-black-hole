@@ -10,7 +10,6 @@ import {
     normalize,
     orbitCamera,
     ray,
-    sphericalBasis,
     sub,
     vec3,
 } from "./common";

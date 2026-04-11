@@ -15,11 +15,23 @@ import type { BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjec
 
 type AppMode = "main" | "sim2d" | "rayRender3d";
 type RenderPipeline = "cpu" | "gpu";
+type MainSimulationReloadState = {
+    discVisible: boolean;
+    gridVisible: boolean;
+    backgroundMode: renderObjects["background"]["mode"];
+    milkyWayVisible: boolean;
+    useRungeKutta: boolean;
+    cpuRunGeodesic: boolean;
+    gpuRunGeodesic: boolean;
+    spheres: renderObjects["spheres"];
+    hiddenSpheres: renderObjects["spheres"] | null;
+};
 
 const APP_MODE_NAME = "blackhole.appMode";
 const RENDER_PIPELINE_NAME = "blackhole.renderPipeline";
 const CANVAS_DISPLAY_MODE_NAME = "blackhole.canvasDisplayMode";
 const OVERLAY_VISIBILITY_NAME = "blackhole.overlayVisibility";
+const MAIN_SIMULATION_STATE_NAME = "blackhole.mainSimulationState";
 
 const readAndClearStorageValue = (storage: Storage, name: string): string | null => {
     const value = storage.getItem(name);
@@ -50,6 +62,17 @@ const readRenderPipeline = (): RenderPipeline => {
 const reloadWithAppMode = (mode: AppMode): void => {
     localStorage.setItem(APP_MODE_NAME, mode);
     window.location.reload();
+};
+
+const readMainSimulationReloadState = (): MainSimulationReloadState | null => {
+    const storedState = readAndClearStorageValue(sessionStorage, MAIN_SIMULATION_STATE_NAME);
+    if (storedState == null) return null;
+
+    try {
+        return JSON.parse(storedState) as MainSimulationReloadState;
+    } catch {
+        return null;
+    }
 };
 
 const readOverlayVisibility = (): boolean => {
@@ -84,8 +107,17 @@ const readCanvasDisplayMode = (): "default" | "fullscreen" => {
     return "default";
 };
 
-const reloadWithCanvasDisplayMode = (displayMode: "default" | "fullscreen", overlayVisible: boolean): void => {
+const reloadWithCanvasDisplayMode = (
+    displayMode: "default" | "fullscreen",
+    overlayVisible: boolean,
+    renderPipeline: RenderPipeline,
+): void => {
     prepareOverlayReloadVisibility(overlayVisible);
+    if (renderPipeline === "cpu") {
+        localStorage.setItem(RENDER_PIPELINE_NAME, "cpu");
+    } else {
+        localStorage.removeItem(RENDER_PIPELINE_NAME);
+    }
     sessionStorage.setItem(CANVAS_DISPLAY_MODE_NAME, displayMode);
     window.location.reload();
 };
@@ -317,6 +349,36 @@ const applyOverlayVisibility = (visible: boolean): void => {
 
 applyOverlayVisibility(overlayVisible);
 
+const applyMainSimulationReloadState = (mainSimulationReloadState: MainSimulationReloadState | null): void => {
+    if (mainSimulationReloadState == null) return;
+
+    worldObjects.disc.visible = mainSimulationReloadState.discVisible;
+    worldObjects.grid.visible = mainSimulationReloadState.gridVisible;
+    worldObjects.background.mode = mainSimulationReloadState.backgroundMode;
+    worldObjects.background.stars.milkyWayVisible = mainSimulationReloadState.milkyWayVisible;
+    worldObjects.renderGeodesic.useRungeKutta = mainSimulationReloadState.useRungeKutta;
+    worldObjects.spheres = mainSimulationReloadState.spheres;
+    runtimeSettings.cpuRunGeodesic = mainSimulationReloadState.cpuRunGeodesic;
+    runtimeSettings.gpuRunGeodesic = mainSimulationReloadState.gpuRunGeodesic;
+    hiddenSpheres = mainSimulationReloadState.hiddenSpheres;
+};
+
+const persistMainSimulationReloadState = (): void => {
+    const mainSimulationReloadState: MainSimulationReloadState = {
+        discVisible: worldObjects.disc.visible,
+        gridVisible: worldObjects.grid.visible,
+        backgroundMode: worldObjects.background.mode,
+        milkyWayVisible: worldObjects.background.stars.milkyWayVisible,
+        useRungeKutta: worldObjects.renderGeodesic.useRungeKutta,
+        cpuRunGeodesic: runtimeSettings.cpuRunGeodesic,
+        gpuRunGeodesic: runtimeSettings.gpuRunGeodesic,
+        spheres: worldObjects.spheres,
+        hiddenSpheres,
+    };
+
+    sessionStorage.setItem(MAIN_SIMULATION_STATE_NAME, JSON.stringify(mainSimulationReloadState));
+};
+
 const toggleSphereVisibility = (): void => {
     if (hiddenSpheres == null) {
         hiddenSpheres = worldObjects.spheres;
@@ -341,10 +403,16 @@ const toggleGeodesicEnabled = (): void => {
 };
 
 const toggleCanvasDisplayMode = (): void => {
-    reloadWithCanvasDisplayMode(CANVAS_DISPLAY_MODE === "default" ? "fullscreen" : "default", overlayVisible);
+    persistMainSimulationReloadState();
+    reloadWithCanvasDisplayMode(
+        CANVAS_DISPLAY_MODE === "default" ? "fullscreen" : "default",
+        overlayVisible,
+        activeRenderPipeline,
+    );
 };
 
 const toggleRenderPipeline = (): void => {
+    persistMainSimulationReloadState();
     reloadWithRenderPipeline(activeRenderPipeline === "gpu" ? "cpu" : "gpu", overlayVisible);
 };
 
@@ -783,6 +851,7 @@ const installAppConsoleCommands = (mainSimulationWorldObjects?: renderObjects, r
 };
 
 const bootMainSimulation = async (): Promise<void> => {
+    applyMainSimulationReloadState(readMainSimulationReloadState());
     installMainInputHandlers();
     installAppConsoleCommands(worldObjects, requestMainRender);
 

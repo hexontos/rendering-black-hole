@@ -4,25 +4,8 @@ export const rgb = (r: number, g: number, b: number) => ({ r, g, b } satisfies R
 
 export const vec3 = (x: number, y: number, z: number) => ({ x, y, z } satisfies Vector3);
 
-export const sphericalBasis = (theta: number, phi: number): { eR: Vector3; eTheta: Vector3; ePhi: Vector3 } => {
-    const sinTheta = Math.sin(theta);
-    const cosTheta = Math.cos(theta);
-    const sinPhi = Math.sin(phi);
-    const cosPhi = Math.cos(phi);
-
-    return {
-        eR: vec3(sinTheta * cosPhi, cosTheta, sinTheta * sinPhi),
-        eTheta: vec3(cosTheta * cosPhi, -sinTheta, cosTheta * sinPhi),
-        ePhi: vec3(-sinPhi, 0, cosPhi),
-    };
-};
-
 export const cross = (a: Vector3, b: Vector3): Vector3 => {
     return vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
-};
-
-export const mulParts = (a: Vector3, b: Vector3): Vector3 => {
-    return vec3(a.x * b.x, a.y * b.y, a.z * b.z);
 };
 
 export const dot = (a: Vector3, b: Vector3): number => {
@@ -76,8 +59,17 @@ export const cameraRight = (forward: Vector3): Vector3 => {
     return normalize(cross(worldUp, forward));
 };
 
-export const reflect = (direction: Vector3, normal: Vector3): Vector3 => {
-    return sub(direction, mul(normal, dot(direction, normal) * 2));
+const sphericalBasis = (theta: number, phi: number): { eR: Vector3; eTheta: Vector3; ePhi: Vector3 } => {
+    const sinTheta = Math.sin(theta);
+    const cosTheta = Math.cos(theta);
+    const sinPhi = Math.sin(phi);
+    const cosPhi = Math.cos(phi);
+
+    return {
+        eR: vec3(sinTheta * cosPhi, cosTheta, sinTheta * sinPhi),
+        eTheta: vec3(cosTheta * cosPhi, -sinTheta, cosTheta * sinPhi),
+        ePhi: vec3(-sinPhi, 0, cosPhi),
+    };
 };
 
 export const ray = (pos: Vector3, dir: Vector3): Ray => {
