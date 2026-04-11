@@ -14,6 +14,7 @@ export type DemoName = "sim2d" | "rayRender3d";
 
 type ConsoleCommandContext = {
     worldObjects?: renderObjects;
+    requestRender: () => void;
     setCpuGeodesic: (enabled: boolean) => void;
     setGpuGeodesic: (enabled: boolean) => void;
     runCpu: () => void;
@@ -188,6 +189,7 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
 
         context.worldObjects.background.mode = mode;
         console.log(`Background mode set to "${mode}".`);
+        context.requestRender();
     };
 
     target.setGradientBackground = (gradientBackground: unknown) => {
@@ -200,6 +202,7 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
         context.worldObjects.background.gradient = gradientBackground;
         context.worldObjects.background.mode = "gradient";
         console.log("Gradient background updated and activated.");
+        context.requestRender();
     };
 
     target.setStarsBackground = (starsBackground: unknown) => {
@@ -212,6 +215,7 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
         context.worldObjects.background.stars = starsBackground;
         context.worldObjects.background.mode = "stars";
         console.log("Stars background updated and activated.");
+        context.requestRender();
     };
 
     target.setDiscVisible = (visible: unknown) => {
@@ -223,6 +227,7 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
 
         context.worldObjects.disc.visible = visible;
         console.log(`Disc visibility set to ${visible}.`);
+        context.requestRender();
     };
 
     target.setDiscNoiseVisible = (visible: unknown) => {
@@ -234,6 +239,7 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
 
         context.worldObjects.disc.noiseVisible = visible;
         console.log(`Disc noise visibility set to ${visible}.`);
+        context.requestRender();
     };
 
     target.setSpheres = (nextSpheres: unknown) => {
@@ -247,6 +253,7 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
 
             context.worldObjects.spheres = nextSpheres;
             console.log(`Sphere list replaced with ${nextSpheres.length} sphere(s).`);
+            context.requestRender();
             return;
         }
 
@@ -257,6 +264,7 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
 
         context.worldObjects.spheres.push(nextSpheres);
         console.log(`Sphere appended. Total spheres: ${context.worldObjects.spheres.length}.`);
+        context.requestRender();
     };
 
     target.setGridVisible = (visible: unknown) => {
@@ -268,6 +276,7 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
 
         context.worldObjects.grid.visible = visible;
         console.log(`Grid visibility set to ${visible}.`);
+        context.requestRender();
     };
 
     target.setCpuGeodesic = (enabled: unknown) => {
@@ -278,6 +287,7 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
 
         context.setCpuGeodesic(enabled);
         console.log(`CPU geodesic rendering set to ${enabled}.`);
+        context.requestRender();
     };
 
     target.setGpuGeodesic = (enabled: unknown) => {
@@ -288,41 +298,49 @@ export const installConsoleCommands = (context: ConsoleCommandContext): void => 
 
         context.setGpuGeodesic(enabled);
         console.log(`GPU geodesic rendering set to ${enabled}.`);
+        context.requestRender();
     };
 };
 
-export const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step: number = 0.1): void => {
+export const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step: number = 0.1): boolean => {
     const pitchLimit = Math.PI * 0.5 - 0.01;
 
     if (event.key === "ArrowLeft") {
         camera.yaw += step;
         event.preventDefault();
+        return true;
     };
 
     if (event.key === "ArrowRight") {
         camera.yaw -= step;
         event.preventDefault();
+        return true;
     };
 
     if (event.key === "ArrowUp") {
         camera.pitch += step;
         camera.pitch = Math.min(camera.pitch, pitchLimit);
         event.preventDefault();
+        return true;
     }
 
     if (event.key === "ArrowDown") {
         camera.pitch -= step;
         camera.pitch = Math.max(camera.pitch, -pitchLimit);
         event.preventDefault();
+        return true;
     }
+
+    return false;
 }
 
-export const handleGeodesicToggleKey = (event: KeyboardEvent, geodesicToggleState: GeodesicToggleState): void => {
-    if (event.key.toLowerCase() !== "q") return;
+export const handleGeodesicToggleKey = (event: KeyboardEvent, geodesicToggleState: GeodesicToggleState): boolean => {
+    if (event.key.toLowerCase() !== "q") return false;
 
     geodesicToggleState.useRungeKutta = !geodesicToggleState.useRungeKutta;
     console.log(`Geodesic computation set to ${geodesicToggleState.useRungeKutta ? "Runge-Kutta" : "Fast"}.`);
     event.preventDefault();
+    return true;
 };
 
 export const handleCameraMouseDrag = (
@@ -330,8 +348,8 @@ export const handleCameraMouseDrag = (
     camera: Camera,
     mouseDrag: MouseDrag,
     sensitivity: number = 0.005,
-): void => {
-    if (!mouseDrag.active) return;
+): boolean => {
+    if (!mouseDrag.active) return false;
 
     const dx = event.clientX - mouseDrag.lastX;
     const dy = event.clientY - mouseDrag.lastY;
@@ -344,6 +362,7 @@ export const handleCameraMouseDrag = (
 
     const pitchLimit = Math.PI * 0.5 - 0.01;
     camera.pitch = Math.max(-pitchLimit, Math.min(camera.pitch, pitchLimit));
+    return true;
 };
 
 export const handleCameraWheelZoom = (
@@ -352,12 +371,15 @@ export const handleCameraWheelZoom = (
     minRadius: number,
     maxRadius: number,
     zoomStep: number = 1.1,
-): void => {
+): boolean => {
     if (event.deltaY > 0) {
         camera.radius = Math.min(camera.radius * zoomStep, maxRadius);
     } else if (event.deltaY < 0) {
         camera.radius = Math.max(camera.radius / zoomStep, minRadius);
+    } else {
+        return false;
     }
 
     event.preventDefault();
+    return true;
 };
