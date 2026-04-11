@@ -17,8 +17,6 @@ export type Sphere = {
     pos: Vector3;
     radius: number;
     emission: RGB;
-    reflectivity: RGB;
-    roughness: number;
 };
 
 export type BlackHole = Sphere & {

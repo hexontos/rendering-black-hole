@@ -61,9 +61,7 @@ const isSphere = (value: unknown): value is Sphere => {
     return (
         isVector3(value.pos) &&
         isFiniteNumber(value.radius) &&
-        isRgb(value.emission) &&
-        isRgb(value.reflectivity) &&
-        isFiniteNumber(value.roughness)
+        isRgb(value.emission)
     );
 };
 
@@ -119,7 +117,7 @@ Stars background shape:
 { densityPrimary, densitySecondary, baseColor: { r, g, b }, milkyWayVisible, milkyWayNormal: { x, y, z }, milkyWayWidth, milkyWayIntensity, milkyWayColor: { r, g, b } }
 
 Sphere shape:
-{ pos: { x, y, z }, radius, emission: { r, g, b }, reflectivity: { r, g, b }, roughness }
+{ pos: { x, y, z }, radius, emission: { r, g, b } }
 
 Examples:
 runDemo("sim2d")
@@ -130,8 +128,8 @@ runGpu()
 setBackgroundMode("gradient")
 setGradientBackground({ topLeft: { r: 255, g: 48, b: 48 }, topRight: { r: 255, g: 220, b: 0 }, bottomLeft: { r: 24, g: 12, b: 120 }, bottomRight: { r: 160, g: 0, b: 255 } })
 setStarsBackground({ densityPrimary: 0.023, densitySecondary: 0.011, baseColor: { r: 3, g: 4, b: 8 }, milkyWayVisible: true, milkyWayNormal: { x: 0.26, y: 0.9, z: -0.34 }, milkyWayWidth: 0.17, milkyWayIntensity: 0.42, milkyWayColor: { r: 128, g: 112, b: 84 } })
-setSpheres({ pos: { x: -100, y: 0, z: 0 }, radius: 10, emission: { r: 255, g: 160, b: 0 }, reflectivity: { r: 0, g: 0, b: 0 }, roughness: 0 })
-setSpheres([{ pos: { x: -100, y: 0, z: 0 }, radius: 10, emission: { r: 255, g: 160, b: 0 }, reflectivity: { r: 0, g: 0, b: 0 }, roughness: 0 }])
+setSpheres({ pos: { x: -100, y: 0, z: 0 }, radius: 10, emission: { r: 255, g: 160, b: 0 } })
+setSpheres([{ pos: { x: -100, y: 0, z: 0 }, radius: 10, emission: { r: 255, g: 160, b: 0 } }])
 setDiscVisible(false)
 setDiscNoiseVisible(true)
 setGridVisible(false)

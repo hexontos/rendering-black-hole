@@ -98,8 +98,6 @@ const blackHole = {
     gravity: G * SAGITTARIUS_A_MASS,
     radius: EVENT_HORIZON_RADIUS,
     emission: rgb(0, 0, 0),
-    reflectivity: rgb(0, 0, 0),
-    roughness: 0,
 } satisfies BlackHole;
 
 const camera = {
@@ -113,7 +111,7 @@ const camera = {
 const disc = {
     pos: blackHole.pos,
     innerRadius: 1.8 * SCHWARZSCHILD_RADIUS,
-    outerRadius: 2.7 * SCHWARZSCHILD_RADIUS,
+    outerRadius: 2.9 * SCHWARZSCHILD_RADIUS,
     visible: true,
     noiseVisible: false,
     noiseDensity: 0.1, // 0...1
@@ -176,22 +174,16 @@ const worldObjects: renderObjects = {
             pos: vec3(-6.5 * SCHWARZSCHILD_RADIUS, 0, 4*SCHWARZSCHILD_RADIUS),
             radius: 1.2 * SCHWARZSCHILD_RADIUS,
             emission: rgb(196, 0, 0),
-            reflectivity: rgb(0.25, 1, 0.76), // normalized 0..1 per channel
-            roughness: 3,
         },
         {
             pos: vec3(0, 0, 9*SCHWARZSCHILD_RADIUS),
             radius: 1.7 * SCHWARZSCHILD_RADIUS,
             emission: rgb(115, 0, 255),
-            reflectivity: rgb(0, 0, 0),
-            roughness: 0,
         },
         {
             pos: vec3(-7 * SCHWARZSCHILD_RADIUS, 0.5 * SCHWARZSCHILD_RADIUS, -14*SCHWARZSCHILD_RADIUS),
             radius: 2 * SCHWARZSCHILD_RADIUS,
             emission: rgb(232, 213, 255),
-            reflectivity: rgb(1, 0, 1),
-            roughness: 10,
         },
     ],
 };

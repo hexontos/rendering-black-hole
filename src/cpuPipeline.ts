@@ -7,11 +7,9 @@ import {
     gRay,
     mag,
     mul,
-    mulParts,
     normalize,
     orbitCamera,
     ray,
-    reflect,
     sphericalBasis,
     sub,
     vec3,
@@ -247,9 +245,7 @@ const intersection = (origin: Vector3, direction: Vector3, objects: RenderOBJ[])
             Math.abs(object.radius ** 2 - distFromClosestPointToSphere ** 2),
         );
         const point = add(origin, mul(direction, distToIntersection));
-        let normal = normalize(sub(point, object.pos));
-
-        normal = normalize(add(normal, mul(vec3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5), object.roughness)));
+        const normal = normalize(sub(point, object.pos));
 
         if (distToClosestPointOnRay > 0 && distFromClosestPointToSphere < object.radius) {
             currentIntersection = {
@@ -291,8 +287,7 @@ const intersection = (origin: Vector3, direction: Vector3, objects: RenderOBJ[])
     };
 };
 
-const trace = (origin: Vector3, direction: Vector3, worldObjects: renderObjects, steps: number): Vector3 | null => {
-    const blackhole = worldObjects.blackhole;
+const trace = (origin: Vector3, direction: Vector3, worldObjects: renderObjects): Vector3 | null => {
     const hit = intersection(origin, direction, [worldObjects.blackhole, ...worldObjects.spheres]);
     const discHit = intersectDisc(origin, direction, worldObjects.disc);
 
@@ -300,31 +295,8 @@ const trace = (origin: Vector3, direction: Vector3, worldObjects: renderObjects,
         return sampleDisc(origin, discHit.point, worldObjects.disc);
     }
 
-    if (hit.collided && steps > 0) {
-        const reflectedOrigin = hit.point;
-        const reflectedDirection = reflect(direction, hit.normal);
-        const reflectedColor = trace(
-            reflectedOrigin,
-            reflectedDirection,
-            {
-                background: worldObjects.background,
-                blackhole: worldObjects.blackhole,
-                disc: worldObjects.disc,
-                renderGeodesic: worldObjects.renderGeodesic,
-                grid: worldObjects.grid,
-                spheres: worldObjects.spheres.filter((o) => o !== hit.object),
-            },
-            steps - 1,
-        );
-        return add(
-            vec3(hit.object.emission.r, hit.object.emission.g, hit.object.emission.b),
-            reflectedColor == null
-                ? vec3(0, 0, 0)
-                : mulParts(
-                    reflectedColor,
-                    vec3(hit.object.reflectivity.r, hit.object.reflectivity.g, hit.object.reflectivity.b),
-                ),
-        );
+    if (hit.collided) {
+        return vec3(hit.object.emission.r, hit.object.emission.g, hit.object.emission.b);
     }
 
     return traceBackgroundGrid(origin, direction);
@@ -710,8 +682,7 @@ const segmentSphereIntersection = (
         if (dist === Infinity || dist >= minDist) continue;
 
         const point = add(segmentStart, mul(direction, dist));
-        let normal = normalize(sub(point, object.pos));
-        normal = normalize(add(normal, mul(vec3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5), object.roughness)));
+        const normal = normalize(sub(point, object.pos));
 
         closestIntersection = {
             collided: true,
@@ -797,7 +768,6 @@ const traceGeodesic = (
     rayOrigin: Vector3,
     rayDirection: Vector3,
     worldObjects: renderObjects,
-    steps: number,
     colorOrigin: Vector3 = rayOrigin,
 ): Vector3 | null => {
     const blackhole = worldObjects.blackhole;
@@ -836,15 +806,6 @@ const traceGeodesic = (
             blackhole.pos.z + geodesicRay.r * sinTheta * sinPhi,
         );
 
-        const { eR, eTheta, ePhi } = sphericalBasis(geodesicRay.theta, geodesicRay.phi);
-        const currentDirection = normalize(add(
-            add(
-                mul(eR, geodesicRay.dr),
-                mul(eTheta, geodesicRay.r * geodesicRay.dtheta),
-            ),
-            mul(ePhi, geodesicRay.r * Math.max(Math.sin(geodesicRay.theta), 1e-9) * geodesicRay.dphi),
-        ));
-
         const objectHit = segmentSphereIntersection(
             previousWorldPoint,
             currentWorldPoint,
@@ -864,34 +825,7 @@ const traceGeodesic = (
                 return vec3(0, 0, 0);
             }
 
-            if (steps <= 0) {
-                return vec3(objectHit.object.emission.r, objectHit.object.emission.g, objectHit.object.emission.b);
-            }
-
-            const reflectedDirection = reflect(currentDirection, objectHit.normal);
-            const reflectedWorldObjects = {
-                background: worldObjects.background,
-                blackhole: worldObjects.blackhole,
-                disc: worldObjects.disc,
-                renderGeodesic: worldObjects.renderGeodesic,
-                grid: worldObjects.grid,
-                spheres: worldObjects.spheres.filter((object) => object !== objectHit.object),
-            } satisfies renderObjects;
-            const reflectedColor = traceGeodesic(objectHit.point, reflectedDirection, reflectedWorldObjects, steps - 1, colorOrigin);
-
-            return add(
-                vec3(objectHit.object.emission.r, objectHit.object.emission.g, objectHit.object.emission.b),
-                reflectedColor == null
-                    ? vec3(0, 0, 0)
-                    : mulParts(
-                        reflectedColor,
-                        vec3(objectHit.object.reflectivity.r, objectHit.object.reflectivity.g, objectHit.object.reflectivity.b),
-                    ),
-            );
-        }
-
-        if (geodesicRay.r <= captureRadius) {
-            return vec3(0, 0, 0);
+            return vec3(objectHit.object.emission.r, objectHit.object.emission.g, objectHit.object.emission.b);
         }
 
         if (geodesicRay.r >= escapeRadius && stepIndex > 8) {
@@ -918,7 +852,6 @@ const cpuRenderRayTracing = (
     const SCREEN_WIDTH = wc.screenWidth;
     const SCREEN_HEIGHT = wc.screenHeight;
     const pixels: ImageDataArray = image.data;
-    const samples = runGeodesic ? 1 : 4; // for computing randomness like roughness material in spheres
 
     const cameraPos = orbitCamera(camera);
     const forward = cameraForward(cameraPos, camera);
@@ -934,23 +867,12 @@ const cpuRenderRayTracing = (
             const rayDirection = normalize(add(add(mul(right, x), mul(up, -y),), mul(forward, camera.focalLength)));
             const rayOrigin = cameraPos;
 
-            let pixel: Vector3 = vec3(0, 0, 0);
-            let hitSamples = 0;
-            
-            for (let n: number = 0; n < samples; n++) {
-                const sample = runGeodesic
-                    ? traceGeodesic(rayOrigin, rayDirection, worldObjects, samples)
-                    : trace(rayOrigin, rayDirection, worldObjects, samples);
+            const pixel = runGeodesic
+                ? traceGeodesic(rayOrigin, rayDirection, worldObjects)
+                : trace(rayOrigin, rayDirection, worldObjects);
 
-                if (sample != null) {
-                    pixel = add(pixel, sample);
-                    hitSamples += 1;
-                }
-            };
+            if (pixel == null) continue;
 
-            if (hitSamples === 0) continue;
-
-            pixel = mul(pixel, 1/hitSamples);
             const index = cpuPixelIndex(i, j, SCREEN_WIDTH);
             pixels[index + 0] = toByte(pixel.x);
             pixels[index + 1] = toByte(pixel.y);

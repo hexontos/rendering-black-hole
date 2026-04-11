@@ -58,9 +58,7 @@ struct Intersection {
     collided: bool,
     dist: f32,
     point: vec3f,
-    normal: vec3f,
     color: vec3f,
-    kind: u32,
 };
 
 struct TraceResult {
@@ -94,7 +92,7 @@ fn gridVsMain(@location(0) position: vec2f) -> GridVSOut {
 }
 
 fn emptyIntersection() -> Intersection {
-    return Intersection(false, 1e30, vec3f(0.0), vec3f(0.0, 1.0, 0.0), vec3f(0.0), 0u);
+    return Intersection(false, 1e30, vec3f(0.0), vec3f(0.0));
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -360,15 +358,6 @@ fn worldPoint(ray: GeodesicRay, blackholePos: vec3f) -> vec3f {
     );
 }
 
-fn worldDirection(ray: GeodesicRay) -> vec3f {
-    let basis = sphericalBasis(ray.theta, ray.phi);
-    return normalize(
-        basis.eR * ray.dr +
-        basis.eTheta * (ray.r * ray.dtheta) +
-        basis.ePhi * (ray.r * max(sin(ray.theta), 1e-9) * ray.dphi)
-    );
-}
-
 fn invalidGeodesicRay(ray: GeodesicRay) -> bool {
     return
         ray.r != ray.r ||
@@ -392,7 +381,6 @@ fn segmentSphereIntersection(
     center: vec3f,
     radius: f32,
     color: vec3f,
-    kind: u32,
 ) -> Intersection {
     let segment = segmentEnd - segmentStart;
     let segmentLength = length(segment);
@@ -427,8 +415,7 @@ fn segmentSphereIntersection(
     }
 
     let point = segmentStart + direction * dist;
-    let normal = normalize(point - center);
-    return Intersection(true, dist, point, normal, color, kind);
+    return Intersection(true, dist, point, color);
 }
 
 fn sampleDisc(_origin: vec3f, point: vec3f) -> vec3f {
@@ -508,9 +495,7 @@ fn segmentDiscIntersection(
         true,
         length(segment) * t,
         point,
-        vec3f(0.0, 1.0, 0.0),
         sampleDisc(origin, point),
-        3u,
     );
 }
 
@@ -520,7 +505,6 @@ fn raySphereIntersection(
     center: vec3f,
     radius: f32,
     color: vec3f,
-    kind: u32,
 ) -> Intersection {
     let oc = rayOrigin - center;
     let b = 2.0 * dot(oc, rayDirection);
@@ -547,8 +531,7 @@ fn raySphereIntersection(
     }
 
     let point = rayOrigin + rayDirection * dist;
-    let normal = normalize(point - center);
-    return Intersection(true, dist, point, normal, color, kind);
+    return Intersection(true, dist, point, color);
 }
 
 fn rayDiscIntersection(
@@ -587,9 +570,7 @@ fn rayDiscIntersection(
         true,
         t,
         point,
-        vec3f(0.0, 1.0, 0.0),
         sampleDisc(rayOrigin, point),
-        3u,
     );
 }
 
@@ -610,7 +591,7 @@ fn traceStraight(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
     let sphereCount = u32(scene.screen.w);
 
     var hit = emptyIntersection();
-    hit = closestIntersection(hit, raySphereIntersection(rayOrigin, rayDirection, blackholePos, captureRadius, vec3f(0.0), 1u));
+    hit = closestIntersection(hit, raySphereIntersection(rayOrigin, rayDirection, blackholePos, captureRadius, vec3f(0.0)));
     for (var sphereIndex: u32 = 0u; sphereIndex < sphereCount; sphereIndex = sphereIndex + 1u) {
         let sphere = spheres[sphereIndex];
         hit = closestIntersection(
@@ -621,7 +602,6 @@ fn traceStraight(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
                 sphere.posRadius.xyz,
                 sphere.posRadius.w,
                 sphere.emission.xyz,
-                2u,
             ),
         );
     }
@@ -665,10 +645,9 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
         }
 
         let currentWorldPoint = worldPoint(geodesicRay, blackholePos);
-        let _currentDirection = worldDirection(geodesicRay);
 
         var hit = emptyIntersection();
-        hit = closestIntersection(hit, segmentSphereIntersection(previousWorldPoint, currentWorldPoint, blackholePos, captureRadius, vec3f(0.0), 1u));
+        hit = closestIntersection(hit, segmentSphereIntersection(previousWorldPoint, currentWorldPoint, blackholePos, captureRadius, vec3f(0.0)));
         for (var sphereIndex: u32 = 0u; sphereIndex < sphereCount; sphereIndex = sphereIndex + 1u) {
             let sphere = spheres[sphereIndex];
             hit = closestIntersection(
@@ -679,7 +658,6 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
                     sphere.posRadius.xyz,
                     sphere.posRadius.w,
                     sphere.emission.xyz,
-                    2u,
                 ),
             );
         }
@@ -687,10 +665,6 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
 
         if (hit.collided) {
             return TraceResult(true, hit.color);
-        }
-
-        if (geodesicRay.r <= captureRadius) {
-            return TraceResult(true, vec3f(0.0));
         }
 
         if (geodesicRay.r >= escapeRadius && stepIndex > 8u) {
