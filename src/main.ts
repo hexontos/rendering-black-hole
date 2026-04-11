@@ -53,6 +53,14 @@ const canvasElement = document.getElementById("blackhole-canvas");
 if (!(canvasElement instanceof HTMLCanvasElement)) throw new Error("Canvas element #blackhole-canvas was not found....");
 
 const canvas = canvasElement;
+const DISPLAY_WIDTH = canvas.width;
+const DISPLAY_HEIGHT = canvas.height;
+const RENDER_SCALE = 0.45;
+
+canvas.style.width = `${DISPLAY_WIDTH}px`;
+canvas.style.height = `${DISPLAY_HEIGHT}px`;
+canvas.width = Math.max(1, Math.round(DISPLAY_WIDTH * RENDER_SCALE));
+canvas.height = Math.max(1, Math.round(DISPLAY_HEIGHT * RENDER_SCALE));
 
 const worldConf = {
     screenWidth: canvas.width,
@@ -75,7 +83,7 @@ const SAGITTARIUS_A_MASS = worldConf.sagittariusAMass;
 const WORLD_CENTER = worldConf.worldCenter;
 const SCHWARZSCHILD_RADIUS = 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2);
 const EVENT_HORIZON_RADIUS = SCHWARZSCHILD_RADIUS;
-const CAMERA_RADIUS = 8 * SCHWARZSCHILD_RADIUS;
+const CAMERA_RADIUS = 16 * SCHWARZSCHILD_RADIUS;
 
 const blackHole = {
     pos: WORLD_CENTER,
@@ -109,9 +117,9 @@ const disc = {
 } satisfies Disc;
 
 const renderGeodesic = {
-    dλ: 5e7,
-    maxSteps: 8192,
-    escapeRadiusMultiplier: 30,
+    dλ: 5e7 * 1.4,
+    maxSteps: 2**15,
+    escapeRadiusMultiplier: 40,
     useRungeKutta: false,
 } satisfies renderObjects["renderGeodesic"];
 
@@ -119,7 +127,7 @@ const grid = {
     visible: true,
     pos: vec3(
         blackHole.pos.x,
-        blackHole.pos.y - 2.4 * SCHWARZSCHILD_RADIUS,
+        blackHole.pos.y - 2.8 * SCHWARZSCHILD_RADIUS,
         blackHole.pos.z,
     ),
     halfSize: 3.5 * SCHWARZSCHILD_RADIUS,
@@ -237,8 +245,8 @@ const mouseDrag: MouseDrag = {
     lastY: 0,
 };
 
-const MIN_CAMERA_RADIUS = CAMERA_RADIUS / 1.2;
-const MAX_CAMERA_RADIUS = CAMERA_RADIUS * 2;
+const MIN_CAMERA_RADIUS = CAMERA_RADIUS / 1.4;
+const MAX_CAMERA_RADIUS = CAMERA_RADIUS * 1.9;
 
 const installMainInputHandlers = (): void => {
     window.addEventListener("keydown", (event) => {

@@ -295,12 +295,12 @@ export const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step
     const pitchLimit = Math.PI * 0.5 - 0.01;
 
     if (event.key === "ArrowLeft") {
-        camera.yaw -= step;
+        camera.yaw += step;
         event.preventDefault();
     };
 
     if (event.key === "ArrowRight") {
-        camera.yaw += step;
+        camera.yaw -= step;
         event.preventDefault();
     };
 
