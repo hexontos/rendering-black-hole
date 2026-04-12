@@ -256,7 +256,7 @@ const worldObjects: renderObjects = {
             emission: rgb(115, 0, 255),
         },
         {
-            pos: vec3(-20 * SCHWARZSCHILD_RADIUS, 8 * SCHWARZSCHILD_RADIUS, -14*SCHWARZSCHILD_RADIUS),
+            pos: vec3(-30 * SCHWARZSCHILD_RADIUS, -3 * SCHWARZSCHILD_RADIUS, -7*SCHWARZSCHILD_RADIUS),
             radius: 3 * SCHWARZSCHILD_RADIUS,
             emission: rgb(232, 213, 255),
         },

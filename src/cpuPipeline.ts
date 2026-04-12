@@ -3,13 +3,12 @@ import {
     cameraForward,
     cameraRight,
     cameraUp,
+    cross,
     dot,
-    gRay,
     mag,
     mul,
     normalize,
     orbitCamera,
-    ray,
     sub,
     vec3,
 } from "./common";
@@ -17,16 +16,28 @@ import type {
     BlackHole,
     Camera,
     Disc,
-    GeodesicRay,
     INTERSECTION,
     PLANE_INTERSECTION,
     RenderOBJ,
-    SchwarzschildRadius,
-    SixStates,
     Vector3,
     WorldConfig,
     renderObjects,
 } from "./types";
+
+type OrbitalPlane = {
+    radialAxis: Vector3;
+    tangentialAxis: Vector3;
+};
+
+type PlanarGeodesicRay = {
+    r: number;
+    phi: number;
+    dr: number;
+    dphi: number;
+    E: number;
+};
+
+type FourStates = [number, number, number, number];
 
 const intersectPlane = (origin: Vector3, direction: Vector3, planeY: number): PLANE_INTERSECTION => {
     if (Math.abs(direction.y) < 1e-9) {
@@ -49,23 +60,6 @@ const intersectPlane = (origin: Vector3, direction: Vector3, planeY: number): PL
         dist,
         point: add(origin, mul(direction, dist)),
     };
-};
-
-const sampleGrid = (point: Vector3, cellSize: number, lineWidth: number, halfSize: number, blackhole: BlackHole): Vector3 | null => {
-    const local = sub(point, blackhole.pos);
-    if (Math.abs(local.x) > halfSize || Math.abs(local.z) > halfSize) return null;
-
-    const gx = ((local.x % cellSize) + cellSize) % cellSize;
-    const gz = ((local.z % cellSize) + cellSize) % cellSize;
-
-    const onLine =
-        gx < lineWidth ||
-        gx > cellSize - lineWidth ||
-        gz < lineWidth ||
-        gz > cellSize - lineWidth;
-
-    if (onLine) return vec3(255, 255, 255);
-    return null;
 };
 
 const gridVertexY = (
@@ -147,7 +141,7 @@ const drawLineToImage = (
     }
 };
 
-const intersectDisc = (origin: Vector3, direction: Vector3, disc: Disc): PLANE_INTERSECTION => {
+const intersectDisc = (origin: Vector3, direction: Vector3, disc: Disc, blackhole: BlackHole): PLANE_INTERSECTION => {
     if (!disc.visible) {
         return {
             collided: false,
@@ -160,9 +154,10 @@ const intersectDisc = (origin: Vector3, direction: Vector3, disc: Disc): PLANE_I
     if (discPlane.collided) {
         const local = sub(discPlane.point, disc.pos);
         const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
+        const innerEdgeBias = blackhole.schwarzschildRadius * 0.1;
 
         if (
-            radialDist >= disc.innerRadius &&
+            radialDist >= disc.innerRadius + innerEdgeBias &&
             radialDist <= disc.outerRadius
         ) {
             return discPlane;
@@ -175,7 +170,7 @@ const intersectDisc = (origin: Vector3, direction: Vector3, disc: Disc): PLANE_I
     };
 };
 
-const sampleDisc = (_origin: Vector3, point: Vector3, disc: Disc): Vector3 => {
+const sampleDisc = (point: Vector3, disc: Disc): Vector3 => {
     const local = sub(point, disc.pos);
     const radialDist = Math.sqrt(local.x ** 2 + local.z ** 2);
     const radialT = Math.max(0, Math.min(1, (radialDist - disc.innerRadius) / (disc.outerRadius - disc.innerRadius)));
@@ -191,10 +186,6 @@ const sampleDisc = (_origin: Vector3, point: Vector3, disc: Disc): Vector3 => {
         radialColor.y + disc.radialBoost.g * innerT,
         radialColor.z + disc.radialBoost.b * innerT,
     );
-};
-
-const traceBackgroundGrid = (_origin: Vector3, _direction: Vector3): Vector3 | null => {
-    return null;
 };
 
 const blackholeShadowRadius = (blackhole: BlackHole): number => {
@@ -221,14 +212,12 @@ const intersection = (origin: Vector3, direction: Vector3, objects: RenderOBJ[])
             Math.abs(object.radius ** 2 - distFromClosestPointToSphere ** 2),
         );
         const point = add(origin, mul(direction, distToIntersection));
-        const normal = normalize(sub(point, object.pos));
 
         if (distToClosestPointOnRay > 0 && distFromClosestPointToSphere < object.radius) {
             currentIntersection = {
                 collided: true,
                 dist: distToIntersection,
                 point,
-                normal,
                 object,
             };
         } else {
@@ -252,7 +241,6 @@ const intersection = (origin: Vector3, direction: Vector3, objects: RenderOBJ[])
             collided: true,
             point: closestIntersection.point,
             dist: closestIntersection.dist,
-            normal: closestIntersection.normal,
             object: closestObject,
         };
     }
@@ -269,17 +257,17 @@ const trace = (origin: Vector3, direction: Vector3, worldObjects: renderObjects)
         direction,
         [{ ...worldObjects.blackhole, radius: blackholeShadowRadius(worldObjects.blackhole) }, ...worldObjects.spheres],
     );
-    const discHit = intersectDisc(origin, direction, worldObjects.disc);
+    const discHit = intersectDisc(origin, direction, worldObjects.disc, worldObjects.blackhole);
 
     if (discHit.collided && (!hit.collided || discHit.dist < hit.dist)) {
-        return sampleDisc(origin, discHit.point, worldObjects.disc);
+        return sampleDisc(discHit.point, worldObjects.disc);
     }
 
     if (hit.collided) {
         return vec3(hit.object.emission.r, hit.object.emission.g, hit.object.emission.b);
     }
 
-    return traceBackgroundGrid(origin, direction);
+    return null;
 };
 
 const cpuRenderGravityGrid = (
@@ -288,7 +276,6 @@ const cpuRenderGravityGrid = (
     worldObjects: renderObjects,
     wc: WorldConfig,
 ): void => {
-    const blackhole = camera.target;
     const grid = worldObjects.grid;
     if (!grid.visible) return;
 
@@ -350,9 +337,193 @@ const cpuRenderGravityGrid = (
 
 const cpuPixelIndex = (x: number, y: number, screenWidth: number): number => (y * screenWidth + x) * 4;
 
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+
+const lerpColor = (a: Vector3, b: Vector3, t: number): Vector3 => {
+    return vec3(
+        lerp(a.x, b.x, t),
+        lerp(a.y, b.y, t),
+        lerp(a.z, b.z, t),
+    );
+};
+
 const hash21 = (x: number, y: number): number => {
     const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
     return n - Math.floor(n);
+};
+
+const hash22 = (x: number, y: number): Vector3 => {
+    return vec3(
+        hash21(x + 17.0, y + 59.4),
+        hash21(x + 63.1, y + 12.8),
+        0,
+    );
+};
+
+const cameraRayDirection = (
+    x: number,
+    y: number,
+    screenWidth: number,
+    screenHeight: number,
+    focalLength: number,
+    forward: Vector3,
+    right: Vector3,
+    up: Vector3,
+): Vector3 => {
+    const screenX = x - screenWidth * 0.5;
+    const screenY = y - screenHeight * 0.5;
+
+    return normalize(
+        add(
+            add(mul(right, screenX), mul(up, -screenY)),
+            mul(forward, focalLength),
+        ),
+    );
+};
+
+const sampleGradientBackground = (u: number, v: number, worldObjects: renderObjects): Vector3 => {
+    const topLeft = vec3(worldObjects.background.gradient.topLeft.r, worldObjects.background.gradient.topLeft.g, worldObjects.background.gradient.topLeft.b);
+    const topRight = vec3(worldObjects.background.gradient.topRight.r, worldObjects.background.gradient.topRight.g, worldObjects.background.gradient.topRight.b);
+    const bottomLeft = vec3(worldObjects.background.gradient.bottomLeft.r, worldObjects.background.gradient.bottomLeft.g, worldObjects.background.gradient.bottomLeft.b);
+    const bottomRight = vec3(worldObjects.background.gradient.bottomRight.r, worldObjects.background.gradient.bottomRight.g, worldObjects.background.gradient.bottomRight.b);
+
+    const top = lerpColor(topLeft, topRight, u);
+    const bottom = lerpColor(bottomLeft, bottomRight, u);
+    return lerpColor(top, bottom, v);
+};
+
+const sampleStarField = (direction: Vector3, worldObjects: renderObjects): Vector3 => {
+    const background = worldObjects.background;
+    const skyUv = vec3(
+        Math.atan2(direction.z, direction.x) / (2.0 * Math.PI) + 0.5,
+        Math.acos(Math.max(-1, Math.min(1, direction.y))) / Math.PI,
+        0,
+    );
+    const milkyWayNormal = normalize(background.stars.milkyWayNormal);
+    const milkyWayWidth = Math.max(background.stars.milkyWayWidth, 1e-4);
+    const planeDist = Math.abs(dot(direction, milkyWayNormal));
+    const milkyWayBand = Math.exp(-((planeDist / milkyWayWidth) ** 2));
+    const milkyWayNoise = 0.55 + 0.45 * hash21(skyUv.x * 220.0, skyUv.y * 110.0);
+    const milkyWayStrength = milkyWayBand * milkyWayNoise * (background.stars.milkyWayVisible ? background.stars.milkyWayIntensity : 0);
+    const milkyWayCoreStrength = milkyWayStrength * (0.45 + 1.25 * milkyWayBand);
+
+    let color = vec3(background.stars.baseColor.r, background.stars.baseColor.g, background.stars.baseColor.b);
+    color = add(
+        color,
+        mul(
+            vec3(background.stars.milkyWayColor.r, background.stars.milkyWayColor.g, background.stars.milkyWayColor.b),
+            milkyWayStrength,
+        ),
+    );
+
+    const primaryUvX = skyUv.x * 720.0;
+    const primaryUvY = skyUv.y * 360.0;
+    const primaryBaseX = Math.floor(primaryUvX);
+    const primaryBaseY = Math.floor(primaryUvY);
+
+    for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+            const cellX = primaryBaseX + ox;
+            const cellY = primaryBaseY + oy;
+            const localX = primaryUvX - cellX - 0.5;
+            const localY = primaryUvY - cellY - 0.5;
+            const primarySeed = hash21(cellX, cellY);
+
+            if (primarySeed > 1.0 - Math.min(0.28, background.stars.densityPrimary + milkyWayCoreStrength * 0.085)) {
+                const offset = hash22(cellX, cellY);
+                const starDist = Math.hypot(localX - (offset.x - 0.5) * 0.7, localY - (offset.y - 0.5) * 0.7);
+                const glow = Math.max(0.0, Math.min(1.0, (0.14 - starDist) / 0.14));
+                const tintSeed = hash21(cellX + 19.7, cellY + 73.1);
+                let starColor = vec3(255, 255, 255);
+
+                if (tintSeed > 0.9975) {
+                    starColor = vec3(255, 148, 107);
+                } else if (tintSeed > 0.985) {
+                    starColor = vec3(255, 230, 158);
+                }
+
+                color = add(
+                    color,
+                    mul(starColor, glow * (0.8 + 1.35 * hash21(cellX + 101.3, cellY + 7.7) + milkyWayCoreStrength * 3.2)),
+                );
+            }
+        }
+    }
+
+    const secondaryUvX = skyUv.x * 1200.0;
+    const secondaryUvY = skyUv.y * 600.0;
+    const secondaryBaseX = Math.floor(secondaryUvX);
+    const secondaryBaseY = Math.floor(secondaryUvY);
+
+    for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+            const cellX = secondaryBaseX + ox;
+            const cellY = secondaryBaseY + oy;
+            const localX = secondaryUvX - cellX - 0.5;
+            const localY = secondaryUvY - cellY - 0.5;
+            const secondarySeed = hash21(cellX + 211.0, cellY + 503.0);
+
+            if (secondarySeed > 1.0 - Math.min(0.22, background.stars.densitySecondary + milkyWayCoreStrength * 0.05)) {
+                const offset = vec3(hash21(cellX + 5.2, cellY + 91.7), hash21(cellX + 29.6, cellY + 13.4), 0);
+                const starDist = Math.hypot(localX - (offset.x - 0.5) * 0.5, localY - (offset.y - 0.5) * 0.5);
+                const glow = Math.max(0.0, Math.min(1.0, (0.06 - starDist) / 0.06));
+                color = add(color, mul(vec3(255, 255, 255), glow * (0.4 + milkyWayCoreStrength * 0.9)));
+            }
+        }
+    }
+
+    const brightUvX = skyUv.x * 520.0;
+    const brightUvY = skyUv.y * 260.0;
+    const brightBaseX = Math.floor(brightUvX);
+    const brightBaseY = Math.floor(brightUvY);
+
+    for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+            const cellX = brightBaseX + ox;
+            const cellY = brightBaseY + oy;
+            const localX = brightUvX - cellX - 0.5;
+            const localY = brightUvY - cellY - 0.5;
+            const brightSeed = hash21(cellX + 401.0, cellY + 887.0);
+
+            if (brightSeed > 1.0 - Math.min(0.12, milkyWayCoreStrength * 0.16)) {
+                const offset = vec3(hash21(cellX + 13.0, cellY + 37.0), hash21(cellX + 71.0, cellY + 19.0), 0);
+                const starDist = Math.hypot(localX - (offset.x - 0.5) * 0.65, localY - (offset.y - 0.5) * 0.65);
+                const glow = Math.max(0.0, Math.min(1.0, (0.18 - starDist) / 0.18));
+                const tintSeed = hash21(cellX + 97.0, cellY + 31.0);
+                let starColor = vec3(255, 255, 255);
+
+                if (tintSeed > 0.9985) {
+                    starColor = vec3(255, 153, 115);
+                } else if (tintSeed > 0.992) {
+                    starColor = vec3(255, 230, 173);
+                }
+
+                color = add(color, mul(starColor, glow * (1.25 + milkyWayCoreStrength * 5.5)));
+            }
+        }
+    }
+
+    return vec3(
+        Math.min(255, color.x),
+        Math.min(255, color.y),
+        Math.min(255, color.z),
+    );
+};
+
+const sampleBackground = (u: number, v: number, direction: Vector3, worldObjects: renderObjects): Vector3 => {
+    if (worldObjects.background.mode === "empty") {
+        return vec3(
+            worldObjects.background.empty.color.r,
+            worldObjects.background.empty.color.g,
+            worldObjects.background.empty.color.b,
+        );
+    }
+
+    if (worldObjects.background.mode === "gradient") {
+        return sampleGradientBackground(u, v, worldObjects);
+    }
+
+    return sampleStarField(direction, worldObjects);
 };
 
 const cpuRenderBackground = (
@@ -363,261 +534,135 @@ const cpuRenderBackground = (
 ): void => {
     const SCREEN_WIDTH = wc.screenWidth;
     const SCREEN_HEIGHT = wc.screenHeight;
-    const background = worldObjects.background;
     const pixels: ImageDataArray = image.data;
     const cameraPos = orbitCamera(camera);
     const forward = cameraForward(cameraPos, camera);
     const right = cameraRight(forward);
     const up = cameraUp(forward, right);
-    const milkyWayNormal = normalize(background.stars.milkyWayNormal);
 
     for (let y = 0; y < SCREEN_HEIGHT; y++) {
         const v = y / Math.max(SCREEN_HEIGHT - 1, 1);
         for (let x = 0; x < SCREEN_WIDTH; x++) {
             const u = x / Math.max(SCREEN_WIDTH - 1, 1);
             const i = cpuPixelIndex(x, y, SCREEN_WIDTH);
+            const rayDirection = cameraRayDirection(x, y, SCREEN_WIDTH, SCREEN_HEIGHT, camera.focalLength, forward, right, up);
+            const color = sampleBackground(u, v, rayDirection, worldObjects);
 
-            if (background.mode === "empty") {
-                pixels[i + 0] = background.empty.color.r;
-                pixels[i + 1] = background.empty.color.g;
-                pixels[i + 2] = background.empty.color.b;
-                pixels[i + 3] = 255;
-                continue;
-            }
-
-            if (background.mode === "gradient") {
-                const topLeft = vec3(background.gradient.topLeft.r, background.gradient.topLeft.g, background.gradient.topLeft.b);
-                const topRight = vec3(background.gradient.topRight.r, background.gradient.topRight.g, background.gradient.topRight.b);
-                const bottomLeft = vec3(background.gradient.bottomLeft.r, background.gradient.bottomLeft.g, background.gradient.bottomLeft.b);
-                const bottomRight = vec3(background.gradient.bottomRight.r, background.gradient.bottomRight.g, background.gradient.bottomRight.b);
-
-                pixels[i + 0] = Math.round(
-                    topLeft.x * (1 - u) * (1 - v) +
-                    topRight.x * u * (1 - v) +
-                    bottomLeft.x * (1 - u) * v +
-                    bottomRight.x * u * v,
-                );
-                pixels[i + 1] = Math.round(
-                    topLeft.y * (1 - u) * (1 - v) +
-                    topRight.y * u * (1 - v) +
-                    bottomLeft.y * (1 - u) * v +
-                    bottomRight.y * u * v,
-                );
-                pixels[i + 2] = Math.round(
-                    topLeft.z * (1 - u) * (1 - v) +
-                    topRight.z * u * (1 - v) +
-                    bottomLeft.z * (1 - u) * v +
-                    bottomRight.z * u * v,
-                );
-                pixels[i + 3] = 255;
-                continue;
-            }
-
-            let color = vec3(
-                background.stars.baseColor.r,
-                background.stars.baseColor.g,
-                background.stars.baseColor.b,
-            );
-            const screenX = x - SCREEN_WIDTH * 0.5;
-            const screenY = y - SCREEN_HEIGHT * 0.5;
-            const rayDirection = normalize(add(add(mul(right, screenX), mul(up, -screenY)), mul(forward, camera.focalLength)));
-            const planeDist = Math.abs(dot(rayDirection, milkyWayNormal));
-            const milkyWayBand = background.stars.milkyWayVisible
-                ? Math.exp(-((planeDist / Math.max(background.stars.milkyWayWidth, 1e-4)) ** 2))
-                : 0;
-            const milkyWayNoise = 0.55 + 0.45 * hash21(u * 220, v * 110);
-            const milkyWayStrength = milkyWayBand * milkyWayNoise * background.stars.milkyWayIntensity;
-            const milkyWayCoreStrength = milkyWayStrength * (0.45 + 1.25 * milkyWayBand);
-
-            color = add(color, mul(vec3(
-                background.stars.milkyWayColor.r,
-                background.stars.milkyWayColor.g,
-                background.stars.milkyWayColor.b,
-            ), milkyWayStrength));
-
-            const primaryUvX = u * 720;
-            const primaryUvY = v * 360;
-            const primaryBaseX = Math.floor(primaryUvX);
-            const primaryBaseY = Math.floor(primaryUvY);
-
-            for (let oy = -1; oy <= 1; oy++) {
-                for (let ox = -1; ox <= 1; ox++) {
-                    const cellX = primaryBaseX + ox;
-                    const cellY = primaryBaseY + oy;
-                    const localX = primaryUvX - cellX - 0.5;
-                    const localY = primaryUvY - cellY - 0.5;
-                    const primarySeed = hash21(cellX, cellY);
-
-                    if (primarySeed > 1 - Math.min(0.28, background.stars.densityPrimary + milkyWayCoreStrength * 0.085)) {
-                        const offsetX = (hash21(cellX + 17, cellY + 59) - 0.5) * 0.7;
-                        const offsetY = (hash21(cellX + 63, cellY + 12) - 0.5) * 0.7;
-                        const starDist = Math.hypot(localX - offsetX, localY - offsetY);
-                        const glow = Math.max(0, Math.min(1, (0.14 - starDist) / 0.14));
-                        const tintSeed = hash21(cellX + 19.7, cellY + 73.1);
-                        let starColor = vec3(255, 255, 255);
-
-                        if (tintSeed > 0.9975) {
-                            starColor = vec3(255, 148, 107);
-                        } else if (tintSeed > 0.985) {
-                            starColor = vec3(255, 230, 158);
-                        }
-
-                        color = add(color, mul(starColor, glow * (0.8 + 1.35 * hash21(cellX + 101.3, cellY + 7.7) + milkyWayCoreStrength * 3.2)));
-                    }
-                }
-            }
-
-            const secondaryUvX = u * 1200;
-            const secondaryUvY = v * 600;
-            const secondaryBaseX = Math.floor(secondaryUvX);
-            const secondaryBaseY = Math.floor(secondaryUvY);
-
-            for (let oy = -1; oy <= 1; oy++) {
-                for (let ox = -1; ox <= 1; ox++) {
-                    const cellX = secondaryBaseX + ox;
-                    const cellY = secondaryBaseY + oy;
-                    const localX = secondaryUvX - cellX - 0.5;
-                    const localY = secondaryUvY - cellY - 0.5;
-                    const secondarySeed = hash21(cellX + 211, cellY + 503);
-
-                    if (secondarySeed > 1 - Math.min(0.22, background.stars.densitySecondary + milkyWayCoreStrength * 0.05)) {
-                        const offsetX = (hash21(cellX + 5.2, cellY + 91.7) - 0.5) * 0.5;
-                        const offsetY = (hash21(cellX + 29.6, cellY + 13.4) - 0.5) * 0.5;
-                        const starDist = Math.hypot(localX - offsetX, localY - offsetY);
-                        const glow = Math.max(0, Math.min(1, (0.06 - starDist) / 0.06));
-                        color = add(color, mul(vec3(255, 255, 255), glow * (0.4 + milkyWayCoreStrength * 0.9)));
-                    }
-                }
-            }
-
-            const milkyWayBrightUvX = u * 520;
-            const milkyWayBrightUvY = v * 260;
-            const milkyWayBrightBaseX = Math.floor(milkyWayBrightUvX);
-            const milkyWayBrightBaseY = Math.floor(milkyWayBrightUvY);
-
-            for (let oy = -1; oy <= 1; oy++) {
-                for (let ox = -1; ox <= 1; ox++) {
-                    const cellX = milkyWayBrightBaseX + ox;
-                    const cellY = milkyWayBrightBaseY + oy;
-                    const localX = milkyWayBrightUvX - cellX - 0.5;
-                    const localY = milkyWayBrightUvY - cellY - 0.5;
-                    const brightSeed = hash21(cellX + 401, cellY + 887);
-
-                    if (brightSeed > 1 - Math.min(0.12, milkyWayCoreStrength * 0.16)) {
-                        const offsetX = (hash21(cellX + 13, cellY + 37) - 0.5) * 0.65;
-                        const offsetY = (hash21(cellX + 71, cellY + 19) - 0.5) * 0.65;
-                        const starDist = Math.hypot(localX - offsetX, localY - offsetY);
-                        const glow = Math.max(0, Math.min(1, (0.18 - starDist) / 0.18));
-                        const tintSeed = hash21(cellX + 97, cellY + 31);
-                        let starColor = vec3(255, 255, 255);
-
-                        if (tintSeed > 0.9985) {
-                            starColor = vec3(255, 153, 115);
-                        } else if (tintSeed > 0.992) {
-                            starColor = vec3(255, 230, 173);
-                        }
-
-                        color = add(color, mul(starColor, glow * (1.25 + milkyWayCoreStrength * 5.5)));
-                    }
-                }
-            }
-
-            pixels[i + 0] = Math.min(255, Math.round(color.x));
-            pixels[i + 1] = Math.min(255, Math.round(color.y));
-            pixels[i + 2] = Math.min(255, Math.round(color.z));
+            pixels[i + 0] = Math.round(color.x);
+            pixels[i + 1] = Math.round(color.y);
+            pixels[i + 2] = Math.round(color.z);
             pixels[i + 3] = 255;
         }
     }
 };
 
-const computeGeodesicDerivatives = (
-    state: { r: number; theta: number; dr: number; dtheta: number; dphi: number; E: number },
-    schwarzschildRadius: SchwarzschildRadius,
-    rhs: SixStates,
-): void => {
-    const r = state.r;
-    const theta = state.theta;
-    const dr = state.dr;
-    const dtheta = state.dtheta;
-    const dphi = state.dphi;
-    const E = state.E;
+const buildOrbitalPlane = (localOrigin: Vector3, direction: Vector3): OrbitalPlane => {
+    const radialAxis = normalize(localOrigin);
+    const planeNormalCandidate = cross(localOrigin, direction);
+    const fallbackAxis = Math.abs(radialAxis.y) > 0.9 ? vec3(1, 0, 0) : vec3(0, 1, 0);
+    const planeNormal = normalize(mag(planeNormalCandidate) < 1e-6 ? cross(radialAxis, fallbackAxis) : planeNormalCandidate);
+    const tangentialAxis = normalize(cross(planeNormal, radialAxis));
 
-    const f = 1.0 - schwarzschildRadius / r;
-    const dtDλ = E / f;
-    const sinTheta = Math.sin(theta);
-    const cosTheta = Math.cos(theta);
-    const sinThetaSafe = Math.abs(sinTheta) < 1e-9 ? (sinTheta >= 0 ? 1e-9 : -1e-9) : sinTheta;
-
-    rhs[0] = dr;
-    rhs[1] = dtheta;
-    rhs[2] = dphi;
-    rhs[3] = -(schwarzschildRadius / (2 * r ** 2)) * f * (dtDλ ** 2)
-        + (schwarzschildRadius / (2 * r ** 2 * f)) * (dr ** 2)
-        + r * (dtheta ** 2 + sinTheta * sinTheta * dphi ** 2);
-    rhs[4] = -(2.0 / r) * dr * dtheta
-        + sinTheta * cosTheta * dphi ** 2;
-    rhs[5] = -(2.0 / r) * dr * dphi
-        - 2.0 * cosTheta / sinThetaSafe * dtheta * dphi;
+    return {
+        radialAxis,
+        tangentialAxis,
+    };
 };
 
-const fourthOrderRungeKutta = (ray: GeodesicRay, dλ: number, schwarzschildRadius: SchwarzschildRadius): void => {
-
-    const y: SixStates = [ray.r, ray.theta, ray.phi, ray.dr, ray.dtheta, ray.dphi];
-    const k1: SixStates = [0, 0, 0, 0, 0, 0];
-    const k2: SixStates = [0, 0, 0, 0, 0, 0];
-    const k3: SixStates = [0, 0, 0, 0, 0, 0];
-    const k4: SixStates = [0, 0, 0, 0, 0, 0];
-    const temp: SixStates = [0, 0, 0, 0, 0, 0];
-
-    computeGeodesicDerivatives({ r: y[0], theta: y[1], dr: y[3], dtheta: y[4], dphi: y[5], E: ray.E }, schwarzschildRadius, k1);
-
-    temp[0] = y[0] + k1[0] * dλ * 0.5;
-    temp[1] = y[1] + k1[1] * dλ * 0.5;
-    temp[2] = y[2] + k1[2] * dλ * 0.5;
-    temp[3] = y[3] + k1[3] * dλ * 0.5;
-    temp[4] = y[4] + k1[4] * dλ * 0.5;
-    temp[5] = y[5] + k1[5] * dλ * 0.5;
-    computeGeodesicDerivatives({ r: temp[0], theta: temp[1], dr: temp[3], dtheta: temp[4], dphi: temp[5], E: ray.E }, schwarzschildRadius, k2);
-
-    temp[0] = y[0] + k2[0] * dλ * 0.5;
-    temp[1] = y[1] + k2[1] * dλ * 0.5;
-    temp[2] = y[2] + k2[2] * dλ * 0.5;
-    temp[3] = y[3] + k2[3] * dλ * 0.5;
-    temp[4] = y[4] + k2[4] * dλ * 0.5;
-    temp[5] = y[5] + k2[5] * dλ * 0.5;
-    computeGeodesicDerivatives({ r: temp[0], theta: temp[1], dr: temp[3], dtheta: temp[4], dphi: temp[5], E: ray.E }, schwarzschildRadius, k3);
-
-    temp[0] = y[0] + k3[0] * dλ;
-    temp[1] = y[1] + k3[1] * dλ;
-    temp[2] = y[2] + k3[2] * dλ;
-    temp[3] = y[3] + k3[3] * dλ;
-    temp[4] = y[4] + k3[4] * dλ;
-    temp[5] = y[5] + k3[5] * dλ;
-    computeGeodesicDerivatives({ r: temp[0], theta: temp[1], dr: temp[3], dtheta: temp[4], dphi: temp[5], E: ray.E }, schwarzschildRadius, k4);
-
-    ray.r += (dλ / 6.0) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]);
-    ray.theta += (dλ / 6.0) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
-    ray.phi += (dλ / 6.0) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]);
-    ray.dr += (dλ / 6.0) * (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3]);
-    ray.dtheta += (dλ / 6.0) * (k1[4] + 2 * k2[4] + 2 * k3[4] + k4[4]);
-    ray.dphi += (dλ / 6.0) * (k1[5] + 2 * k2[5] + 2 * k3[5] + k4[5]);
-};
-
-const fastGeodesicStep = (ray: GeodesicRay, dλ: number, schwarzschildRadius: SchwarzschildRadius): void => {
-    const rhs: SixStates = [0, 0, 0, 0, 0, 0];
-
-    computeGeodesicDerivatives(
-        { r: ray.r, theta: ray.theta, dr: ray.dr, dtheta: ray.dtheta, dphi: ray.dphi, E: ray.E },
-        schwarzschildRadius,
-        rhs,
+const planarGeodesicRay = (
+    localOrigin: Vector3,
+    direction: Vector3,
+    orbitalPlane: OrbitalPlane,
+    schwarzschildRadius: number,
+    captureRadius: number,
+): PlanarGeodesicRay => {
+    const r = mag(localOrigin);
+    const dr = dot(direction, orbitalPlane.radialAxis);
+    const dphi = dot(direction, orbitalPlane.tangentialAxis) / Math.max(r, 1e-9);
+    const rEval = Math.max(r, captureRadius);
+    const f = 1.0 - schwarzschildRadius / rEval;
+    const dtDλ = Math.sqrt(
+        (dr * dr) / (f * f) +
+        ((rEval * rEval) * (dphi * dphi)) / f,
     );
 
-    ray.r += dλ * rhs[0];
-    ray.theta += dλ * rhs[1];
-    ray.phi += dλ * rhs[2];
-    ray.dr += dλ * rhs[3];
-    ray.dtheta += dλ * rhs[4];
-    ray.dphi += dλ * rhs[5];
+    return { r, phi: 0, dr, dphi, E: f * dtDλ };
+};
+
+const computePlanarGeodesicDerivatives = (
+    ray: PlanarGeodesicRay,
+    schwarzschildRadius: number,
+    captureRadius: number,
+): FourStates => {
+    const r = Math.max(ray.r, captureRadius);
+    const f = 1.0 - schwarzschildRadius / r;
+    const dtDλ = ray.E / f;
+
+    return [
+        ray.dr,
+        ray.dphi,
+        -(schwarzschildRadius / (2.0 * r * r)) * f * (dtDλ * dtDλ)
+            + (schwarzschildRadius / (2.0 * r * r * f)) * (ray.dr * ray.dr)
+            + (r - schwarzschildRadius) * (ray.dphi * ray.dphi),
+        -2.0 * ray.dr * ray.dphi / r,
+    ];
+};
+
+const planarRayWithStep = (ray: PlanarGeodesicRay, k: FourStates, factor: number): PlanarGeodesicRay => {
+    return {
+        r: ray.r + k[0] * factor,
+        phi: ray.phi + k[1] * factor,
+        dr: ray.dr + k[2] * factor,
+        dphi: ray.dphi + k[3] * factor,
+        E: ray.E,
+    };
+};
+
+const fourthOrderRungeKuttaPlanar = (
+    ray: PlanarGeodesicRay,
+    dλ: number,
+    schwarzschildRadius: number,
+    captureRadius: number,
+): PlanarGeodesicRay => {
+    const k1 = computePlanarGeodesicDerivatives(ray, schwarzschildRadius, captureRadius);
+    const k2 = computePlanarGeodesicDerivatives(planarRayWithStep(ray, k1, dλ * 0.5), schwarzschildRadius, captureRadius);
+    const k3 = computePlanarGeodesicDerivatives(planarRayWithStep(ray, k2, dλ * 0.5), schwarzschildRadius, captureRadius);
+    const k4 = computePlanarGeodesicDerivatives(planarRayWithStep(ray, k3, dλ), schwarzschildRadius, captureRadius);
+
+    return {
+        r: ray.r + (dλ / 6.0) * (k1[0] + 2.0 * k2[0] + 2.0 * k3[0] + k4[0]),
+        phi: ray.phi + (dλ / 6.0) * (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]),
+        dr: ray.dr + (dλ / 6.0) * (k1[2] + 2.0 * k2[2] + 2.0 * k3[2] + k4[2]),
+        dphi: ray.dphi + (dλ / 6.0) * (k1[3] + 2.0 * k2[3] + 2.0 * k3[3] + k4[3]),
+        E: ray.E,
+    };
+};
+
+const fastGeodesicStepPlanar = (
+    ray: PlanarGeodesicRay,
+    dλ: number,
+    schwarzschildRadius: number,
+    captureRadius: number,
+): PlanarGeodesicRay => {
+    const rhs = computePlanarGeodesicDerivatives(ray, schwarzschildRadius, captureRadius);
+
+    return {
+        r: ray.r + dλ * rhs[0],
+        phi: ray.phi + dλ * rhs[1],
+        dr: ray.dr + dλ * rhs[2],
+        dphi: ray.dphi + dλ * rhs[3],
+        E: ray.E,
+    };
+};
+
+const worldPointPlanar = (ray: PlanarGeodesicRay, orbitalPlane: OrbitalPlane, blackholePos: Vector3): Vector3 => {
+    return add(
+        blackholePos,
+        add(
+            mul(orbitalPlane.radialAxis, ray.r * Math.cos(ray.phi)),
+            mul(orbitalPlane.tangentialAxis, ray.r * Math.sin(ray.phi)),
+        ),
+    );
 };
 
 const segmentSphereIntersection = (
@@ -662,13 +707,10 @@ const segmentSphereIntersection = (
         if (dist === Infinity || dist >= minDist) continue;
 
         const point = add(segmentStart, mul(direction, dist));
-        const normal = normalize(sub(point, object.pos));
-
         closestIntersection = {
             collided: true,
             dist,
             point,
-            normal,
             object,
         };
         closestObject = object;
@@ -680,7 +722,6 @@ const segmentSphereIntersection = (
             collided: true,
             dist: closestIntersection.dist,
             point: closestIntersection.point,
-            normal: closestIntersection.normal,
             object: closestObject,
         };
     }
@@ -747,13 +788,12 @@ const traceGeodesic = (
     rayOrigin: Vector3,
     rayDirection: Vector3,
     worldObjects: renderObjects,
-    colorOrigin: Vector3 = rayOrigin,
 ): Vector3 | null => {
     const blackhole = worldObjects.blackhole;
     const captureRadius = blackhole.schwarzschildRadius * 1.035;
     const localOrigin = sub(rayOrigin, blackhole.pos);
-    const baseRay = ray(localOrigin, rayDirection);
-    const geodesicRay = gRay(baseRay, blackhole);
+    const orbitalPlane = buildOrbitalPlane(localOrigin, rayDirection);
+    let geodesicRay = planarGeodesicRay(localOrigin, rayDirection, orbitalPlane, blackhole.schwarzschildRadius, captureRadius);
 
     const dλ = worldObjects.renderGeodesic.dλ;
     const maxGeodesicSteps = worldObjects.renderGeodesic.maxSteps;
@@ -762,28 +802,16 @@ const traceGeodesic = (
 
     for (let stepIndex = 0; stepIndex < maxGeodesicSteps; stepIndex++) {
         if (worldObjects.renderGeodesic.useRungeKutta) {
-            fourthOrderRungeKutta(geodesicRay, dλ, blackhole.schwarzschildRadius);
+            geodesicRay = fourthOrderRungeKuttaPlanar(geodesicRay, dλ, blackhole.schwarzschildRadius, captureRadius);
         } else {
-            fastGeodesicStep(geodesicRay, dλ, blackhole.schwarzschildRadius);
-        }
-
-        if (!Number.isFinite(geodesicRay.r) || !Number.isFinite(geodesicRay.theta) || !Number.isFinite(geodesicRay.phi) || !Number.isFinite(geodesicRay.dr) || !Number.isFinite(geodesicRay.dtheta) || !Number.isFinite(geodesicRay.dphi)) {
-            return vec3(0, 0, 0);
+            geodesicRay = fastGeodesicStepPlanar(geodesicRay, dλ, blackhole.schwarzschildRadius, captureRadius);
         }
 
         if (geodesicRay.r <= captureRadius) {
             return vec3(0, 0, 0);
         }
 
-        const sinTheta = Math.sin(geodesicRay.theta);
-        const cosTheta = Math.cos(geodesicRay.theta);
-        const sinPhi = Math.sin(geodesicRay.phi);
-        const cosPhi = Math.cos(geodesicRay.phi);
-        const currentWorldPoint = vec3(
-            blackhole.pos.x + geodesicRay.r * sinTheta * cosPhi,
-            blackhole.pos.y + geodesicRay.r * cosTheta,
-            blackhole.pos.z + geodesicRay.r * sinTheta * sinPhi,
-        );
+        const currentWorldPoint = worldPointPlanar(geodesicRay, orbitalPlane, blackhole.pos);
 
         const objectHit = segmentSphereIntersection(
             previousWorldPoint,
@@ -796,7 +824,7 @@ const traceGeodesic = (
         const discHit = segmentDiscIntersection(previousWorldPoint, currentWorldPoint, worldObjects.disc, worldObjects.blackhole);
 
         if (discHit.collided && (!objectHit.collided || discHit.dist < objectHit.dist)) {
-            return sampleDisc(colorOrigin, discHit.point, worldObjects.disc);
+            return sampleDisc(discHit.point, worldObjects.disc);
         }
 
         if (objectHit.collided) {
@@ -817,8 +845,7 @@ const traceGeodesic = (
     return null;
 };
 
-const toneMap = (value: number): number => 255 * (1 - Math.exp(-value * 0.02));
-const toByte = (value: number): number => Math.max(0, Math.min(255, Math.round(toneMap(value))));
+const toByte = (value: number): number => Math.max(0, Math.min(255, Math.round(value)));
 
 const cpuRenderRayTracing = (
     _ctx: CanvasRenderingContext2D,
@@ -840,10 +867,7 @@ const cpuRenderRayTracing = (
     // each pixel in canvas
     for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
         for (let i: number = 0; i < SCREEN_WIDTH; i++) {
-            const x: number = i - SCREEN_WIDTH * 0.5;
-            const y: number = j - SCREEN_HEIGHT * 0.5;
-
-            const rayDirection = normalize(add(add(mul(right, x), mul(up, -y),), mul(forward, camera.focalLength)));
+            const rayDirection = cameraRayDirection(i, j, SCREEN_WIDTH, SCREEN_HEIGHT, camera.focalLength, forward, right, up);
             const rayOrigin = cameraPos;
 
             const pixel = runGeodesic

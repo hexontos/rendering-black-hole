@@ -588,7 +588,8 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
 
 @fragment
 fn backgroundFsMain(in: VSOut) -> @location(0) vec4f {
-    return vec4f(sampleBackground(in.uv, cameraRayDirection(in.uv)), 1.0);
+    let screenUv = vec2f(in.uv.x, 1.0 - in.uv.y);
+    return vec4f(sampleBackground(screenUv, cameraRayDirection(in.uv)), 1.0);
 }
 
 fn cameraRayDirection(uv: vec2f) -> vec3f {
@@ -597,7 +598,7 @@ fn cameraRayDirection(uv: vec2f) -> vec3f {
     let focalLength = scene.screen.z;
 
     let x = uv.x * width - width * 0.5;
-    let y = uv.y * height - height * 0.5;
+    let y = (1.0 - uv.y) * height - height * 0.5;
 
     return normalize(
         scene.cameraRight.xyz * x +

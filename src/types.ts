@@ -93,28 +93,6 @@ export type renderObjects = {
     spheres: Sphere[];
 };
 
-export type Ray = {
-    // cartesian state.
-    pos: Vector3;
-    dir: Vector3;
-    // spherical state
-    r: number;
-    theta: number;
-    phi: number;
-    // seed velocities
-    dr: number;
-    dtheta: number;
-    dphi: number;
-};
-
-export type GeodesicRay = Ray & {
-    // Conserved quantities (in Schwarzschild spacetime)
-    E: number;
-    L: number;
-};
-
-export type SixStates = [number, number, number, number, number, number];
-
 export type Camera = {
     target: BlackHole;
     radius: number;
@@ -128,7 +106,6 @@ export type INTERSECTION =
         collided: true;
         point: Vector3;
         dist: number;
-        normal: Vector3;
         object: RenderOBJ;
     }
     | {
