@@ -5,7 +5,7 @@
   "main": "src/main.ts",
   "scripts": {
     "build": "node esbuild.config.mjs",
-    "dev": "npm run build & npm run watch & live-server . --watch='dist/*' --no-browser",
+    "dev": "npm run build & npm run watch & live-server dist --watch='dist/*' --no-browser",
     "watch": "node esbuild.config.mjs --watch"
   },
   "keywords": [],
