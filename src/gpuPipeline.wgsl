@@ -38,18 +38,15 @@ struct GridVSOut {
     @builtin(position) position : vec4f,
 };
 
-struct SphericalBasis {
-    eR: vec3f,
-    eTheta: vec3f,
-    ePhi: vec3f,
+struct OrbitalPlane {
+    radialAxis: vec3f,
+    tangentialAxis: vec3f,
 };
 
-struct GeodesicRay {
+struct PlanarGeodesicRay {
     r: f32,
-    theta: f32,
     phi: f32,
     dr: f32,
-    dtheta: f32,
     dphi: f32,
     E: f32,
 };
@@ -67,7 +64,6 @@ struct TraceResult {
 };
 
 const PI: f32 = 3.141592653589793;
-const POLE_SINGULARITY_THRESHOLD: f32 = 1e-4;
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 @group(0) @binding(1) var<storage, read> spheres: array<Sphere>;
@@ -96,6 +92,10 @@ fn gridVsMain(@location(0) position: vec2f) -> GridVSOut {
 
 fn emptyIntersection() -> Intersection {
     return Intersection(false, 1e30, vec3f(0.0), vec3f(0.0));
+}
+
+fn blackholeShadowRadius(schwarzschildRadius: f32) -> f32 {
+    return 0.5 * sqrt(27.0) * schwarzschildRadius;
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -238,150 +238,115 @@ fn sampleBackground(uv: vec2f, direction: vec3f) -> vec3f {
     return sampleStarField(direction);
 }
 
-fn nearGeodesicCoordinateSingularity(ray: GeodesicRay) -> bool {
-    return
-        abs(sin(ray.theta)) < POLE_SINGULARITY_THRESHOLD ||
-        abs(ray.dtheta) > 1e5 ||
-        abs(ray.dphi) > 1e5;
-}
-
-fn sphericalBasis(theta: f32, phi: f32) -> SphericalBasis {
-    let sinTheta = sin(theta);
-    let cosTheta = cos(theta);
-    let sinPhi = sin(phi);
-    let cosPhi = cos(phi);
-
-    return SphericalBasis(
-        vec3f(sinTheta * cosPhi, cosTheta, sinTheta * sinPhi),
-        vec3f(cosTheta * cosPhi, -sinTheta, cosTheta * sinPhi),
-        vec3f(-sinPhi, 0.0, cosPhi),
+fn buildOrbitalPlane(localOrigin: vec3f, direction: vec3f) -> OrbitalPlane {
+    let radialAxis = normalize(localOrigin);
+    let planeNormalCandidate = cross(localOrigin, direction);
+    let fallbackAxis = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(radialAxis.y) > 0.9);
+    let planeNormal = normalize(
+        select(
+            planeNormalCandidate,
+            cross(radialAxis, fallbackAxis),
+            length(planeNormalCandidate) < 1e-6,
+        ),
     );
+    let tangentialAxis = normalize(cross(planeNormal, radialAxis));
+
+    return OrbitalPlane(radialAxis, tangentialAxis);
 }
 
-fn ray(pos: vec3f, dir: vec3f) -> GeodesicRay {
-    let r = length(pos);
-    let theta = acos(clamp(pos.y / max(r, 1e-9), -1.0, 1.0));
-    let phi = atan2(pos.z, pos.x);
-    let sinTheta = max(sin(theta), 1e-9);
-    let basis = sphericalBasis(theta, phi);
-    let dr = dot(dir, basis.eR);
-    let dtheta = dot(dir, basis.eTheta) / max(r, 1e-9);
-    let dphi = dot(dir, basis.ePhi) / max(r * sinTheta, 1e-9);
-
-    return GeodesicRay(r, theta, phi, dr, dtheta, dphi, 0.0);
-}
-
-fn gRay(ray: GeodesicRay, schwarzschildRadius: f32) -> GeodesicRay {
-    let f = 1.0 - schwarzschildRadius / max(ray.r, schwarzschildRadius + 1.0);
-    let sinTheta = max(sin(ray.theta), 1e-9);
+fn planarGeodesicRay(
+    localOrigin: vec3f,
+    direction: vec3f,
+    orbitalPlane: OrbitalPlane,
+    schwarzschildRadius: f32,
+    captureRadius: f32,
+) -> PlanarGeodesicRay {
+    let r = length(localOrigin);
+    let dr = dot(direction, orbitalPlane.radialAxis);
+    let dphi = dot(direction, orbitalPlane.tangentialAxis) / max(r, 1e-9);
+    let rEval = max(r, captureRadius);
+    let f = 1.0 - schwarzschildRadius / rEval;
     let dtDλ = sqrt(
-        (ray.dr * ray.dr) / (f * f) +
-        ((ray.r * ray.r) * (ray.dtheta * ray.dtheta + sinTheta * sinTheta * ray.dphi * ray.dphi)) / f
+        (dr * dr) / (f * f) +
+        ((rEval * rEval) * (dphi * dphi)) / f,
     );
-
-    return GeodesicRay(ray.r, ray.theta, ray.phi, ray.dr, ray.dtheta, ray.dphi, f * dtDλ);
+    return PlanarGeodesicRay(r, 0.0, dr, dphi, f * dtDλ);
 }
 
-fn computeGeodesicDerivatives(ray: GeodesicRay, schwarzschildRadius: f32) -> array<f32, 6> {
-    var rhs: array<f32, 6>;
-    let r = ray.r;
-    let theta = ray.theta;
+fn computePlanarGeodesicDerivatives(
+    ray: PlanarGeodesicRay,
+    schwarzschildRadius: f32,
+    captureRadius: f32,
+) -> array<f32, 4> {
+    var rhs: array<f32, 4>;
+    let r = max(ray.r, captureRadius);
     let dr = ray.dr;
-    let dtheta = ray.dtheta;
     let dphi = ray.dphi;
     let E = ray.E;
-
     let f = 1.0 - schwarzschildRadius / r;
     let dtDλ = E / f;
-    let sinTheta = sin(theta);
-    let cosTheta = cos(theta);
-    let sinThetaSafe = select(sinTheta, 1e-9, abs(sinTheta) < 1e-9);
 
     rhs[0] = dr;
-    rhs[1] = dtheta;
-    rhs[2] = dphi;
-    rhs[3] = -(schwarzschildRadius / (2.0 * r * r)) * f * (dtDλ * dtDλ)
+    rhs[1] = dphi;
+    rhs[2] = -(schwarzschildRadius / (2.0 * r * r)) * f * (dtDλ * dtDλ)
         + (schwarzschildRadius / (2.0 * r * r * f)) * (dr * dr)
-        + r * (dtheta * dtheta + sinTheta * sinTheta * dphi * dphi);
-    rhs[4] = -(2.0 / r) * dr * dtheta
-        + sinTheta * cosTheta * dphi * dphi;
-    rhs[5] = -(2.0 / r) * dr * dphi
-        - 2.0 * cosTheta / sinThetaSafe * dtheta * dphi;
+        + (r - schwarzschildRadius) * (dphi * dphi);
+    rhs[3] = -2.0 * dr * dphi / r;
 
     return rhs;
 }
 
-fn rayWithStep(ray: GeodesicRay, k: array<f32, 6>, factor: f32) -> GeodesicRay {
-    return GeodesicRay(
+fn planarRayWithStep(ray: PlanarGeodesicRay, k: array<f32, 4>, factor: f32) -> PlanarGeodesicRay {
+    return PlanarGeodesicRay(
         ray.r + k[0] * factor,
-        ray.theta + k[1] * factor,
-        ray.phi + k[2] * factor,
-        ray.dr + k[3] * factor,
-        ray.dtheta + k[4] * factor,
-        ray.dphi + k[5] * factor,
+        ray.phi + k[1] * factor,
+        ray.dr + k[2] * factor,
+        ray.dphi + k[3] * factor,
         ray.E,
     );
 }
 
-fn fourthOrderRungeKutta(ray: GeodesicRay, dλ: f32, schwarzschildRadius: f32) -> GeodesicRay {
-    let k1 = computeGeodesicDerivatives(ray, schwarzschildRadius);
-    let k2 = computeGeodesicDerivatives(rayWithStep(ray, k1, dλ * 0.5), schwarzschildRadius);
-    let k3 = computeGeodesicDerivatives(rayWithStep(ray, k2, dλ * 0.5), schwarzschildRadius);
-    let k4 = computeGeodesicDerivatives(rayWithStep(ray, k3, dλ), schwarzschildRadius);
+fn fourthOrderRungeKuttaPlanar(
+    ray: PlanarGeodesicRay,
+    dλ: f32,
+    schwarzschildRadius: f32,
+    captureRadius: f32,
+) -> PlanarGeodesicRay {
+    let k1 = computePlanarGeodesicDerivatives(ray, schwarzschildRadius, captureRadius);
+    let k2 = computePlanarGeodesicDerivatives(planarRayWithStep(ray, k1, dλ * 0.5), schwarzschildRadius, captureRadius);
+    let k3 = computePlanarGeodesicDerivatives(planarRayWithStep(ray, k2, dλ * 0.5), schwarzschildRadius, captureRadius);
+    let k4 = computePlanarGeodesicDerivatives(planarRayWithStep(ray, k3, dλ), schwarzschildRadius, captureRadius);
 
-    return GeodesicRay(
+    return PlanarGeodesicRay(
         ray.r + (dλ / 6.0) * (k1[0] + 2.0 * k2[0] + 2.0 * k3[0] + k4[0]),
-        ray.theta + (dλ / 6.0) * (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]),
-        ray.phi + (dλ / 6.0) * (k1[2] + 2.0 * k2[2] + 2.0 * k3[2] + k4[2]),
-        ray.dr + (dλ / 6.0) * (k1[3] + 2.0 * k2[3] + 2.0 * k3[3] + k4[3]),
-        ray.dtheta + (dλ / 6.0) * (k1[4] + 2.0 * k2[4] + 2.0 * k3[4] + k4[4]),
-        ray.dphi + (dλ / 6.0) * (k1[5] + 2.0 * k2[5] + 2.0 * k3[5] + k4[5]),
+        ray.phi + (dλ / 6.0) * (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]),
+        ray.dr + (dλ / 6.0) * (k1[2] + 2.0 * k2[2] + 2.0 * k3[2] + k4[2]),
+        ray.dphi + (dλ / 6.0) * (k1[3] + 2.0 * k2[3] + 2.0 * k3[3] + k4[3]),
         ray.E,
     );
 }
 
-fn fastGeodesicStep(ray: GeodesicRay, dλ: f32, schwarzschildRadius: f32) -> GeodesicRay {
-    let rhs = computeGeodesicDerivatives(ray, schwarzschildRadius);
+fn fastGeodesicStepPlanar(
+    ray: PlanarGeodesicRay,
+    dλ: f32,
+    schwarzschildRadius: f32,
+    captureRadius: f32,
+) -> PlanarGeodesicRay {
+    let rhs = computePlanarGeodesicDerivatives(ray, schwarzschildRadius, captureRadius);
 
-    return GeodesicRay(
+    return PlanarGeodesicRay(
         ray.r + dλ * rhs[0],
-        ray.theta + dλ * rhs[1],
-        ray.phi + dλ * rhs[2],
-        ray.dr + dλ * rhs[3],
-        ray.dtheta + dλ * rhs[4],
-        ray.dphi + dλ * rhs[5],
+        ray.phi + dλ * rhs[1],
+        ray.dr + dλ * rhs[2],
+        ray.dphi + dλ * rhs[3],
         ray.E,
     );
 }
 
-fn worldPoint(ray: GeodesicRay, blackholePos: vec3f) -> vec3f {
-    let sinTheta = sin(ray.theta);
-    let cosTheta = cos(ray.theta);
-    let sinPhi = sin(ray.phi);
-    let cosPhi = cos(ray.phi);
-
-    return vec3f(
-        blackholePos.x + ray.r * sinTheta * cosPhi,
-        blackholePos.y + ray.r * cosTheta,
-        blackholePos.z + ray.r * sinTheta * sinPhi,
-    );
-}
-
-fn invalidGeodesicRay(ray: GeodesicRay) -> bool {
-    return
-        ray.r != ray.r ||
-        ray.theta != ray.theta ||
-        ray.phi != ray.phi ||
-        ray.dr != ray.dr ||
-        ray.dtheta != ray.dtheta ||
-        ray.dphi != ray.dphi ||
-        ray.r <= 0.0 ||
-        abs(ray.r) > 1e18 ||
-        abs(ray.theta) > 1e6 ||
-        abs(ray.phi) > 1e6 ||
-        abs(ray.dr) > 1e12 ||
-        abs(ray.dtheta) > 1e6 ||
-        abs(ray.dphi) > 1e6;
+fn worldPointPlanar(ray: PlanarGeodesicRay, orbitalPlane: OrbitalPlane, blackholePos: vec3f) -> vec3f {
+    let radialComponent = orbitalPlane.radialAxis * (ray.r * cos(ray.phi));
+    let tangentialComponent = orbitalPlane.tangentialAxis * (ray.r * sin(ray.phi));
+    return blackholePos + radialComponent + tangentialComponent;
 }
 
 fn segmentSphereIntersection(
@@ -423,11 +388,10 @@ fn segmentSphereIntersection(
         return emptyIntersection();
     }
 
-    let point = segmentStart + direction * dist;
-    return Intersection(true, dist, point, color);
+    return Intersection(true, dist, segmentStart + direction * dist, color);
 }
 
-fn sampleDisc(_origin: vec3f, point: vec3f) -> vec3f {
+fn sampleDisc(point: vec3f) -> vec3f {
     let local = point - scene.discPos.xyz;
     let radialDist = length(vec2f(local.x, local.z));
     let innerRadius = scene.discParams.x;
@@ -438,11 +402,24 @@ fn sampleDisc(_origin: vec3f, point: vec3f) -> vec3f {
     return clamp(radialColor + scene.discRadialBoost.xyz * innerT, vec3f(0.0), vec3f(1.0));
 }
 
-fn segmentDiscIntersection(
-    segmentStart: vec3f,
-    segmentEnd: vec3f,
-    origin: vec3f,
-) -> Intersection {
+fn discIntersectionAtPoint(point: vec3f, dist: f32) -> Intersection {
+    let local = point - scene.discPos.xyz;
+    let radialDist = length(vec2f(local.x, local.z));
+    let innerRadius = scene.discParams.x;
+    let outerRadius = scene.discParams.y;
+    let innerEdgeBias = scene.blackhole.w * 0.1;
+
+    if (
+        radialDist < innerRadius + innerEdgeBias ||
+        radialDist > outerRadius
+    ) {
+        return emptyIntersection();
+    }
+
+    return Intersection(true, dist, point, sampleDisc(point));
+}
+
+fn segmentDiscIntersection(segmentStart: vec3f, segmentEnd: vec3f) -> Intersection {
     if (scene.discParams.z < 0.5) {
         return emptyIntersection();
     }
@@ -458,35 +435,10 @@ fn segmentDiscIntersection(
         return emptyIntersection();
     }
 
-    let point = segmentStart + segment * t;
-    let local = point - scene.discPos.xyz;
-    let radialDist = length(vec2f(local.x, local.z));
-    let innerRadius = scene.discParams.x;
-    let outerRadius = scene.discParams.y;
-    let innerEdgeBias = scene.blackhole.w * 0.1;
-
-    if (
-        radialDist < innerRadius + innerEdgeBias ||
-        radialDist > outerRadius
-    ) {
-        return emptyIntersection();
-    }
-
-    return Intersection(
-        true,
-        length(segment) * t,
-        point,
-        sampleDisc(origin, point),
-    );
+    return discIntersectionAtPoint(segmentStart + segment * t, length(segment) * t);
 }
 
-fn raySphereIntersection(
-    rayOrigin: vec3f,
-    rayDirection: vec3f,
-    center: vec3f,
-    radius: f32,
-    color: vec3f,
-) -> Intersection {
+fn raySphereIntersection(rayOrigin: vec3f, rayDirection: vec3f, center: vec3f, radius: f32, color: vec3f) -> Intersection {
     let oc = rayOrigin - center;
     let b = 2.0 * dot(oc, rayDirection);
     let c = dot(oc, oc) - radius * radius;
@@ -511,14 +463,10 @@ fn raySphereIntersection(
         return emptyIntersection();
     }
 
-    let point = rayOrigin + rayDirection * dist;
-    return Intersection(true, dist, point, color);
+    return Intersection(true, dist, rayOrigin + rayDirection * dist, color);
 }
 
-fn rayDiscIntersection(
-    rayOrigin: vec3f,
-    rayDirection: vec3f,
-) -> Intersection {
+fn rayDiscIntersection(rayOrigin: vec3f, rayDirection: vec3f) -> Intersection {
     if (scene.discParams.z < 0.5) {
         return emptyIntersection();
     }
@@ -532,26 +480,7 @@ fn rayDiscIntersection(
         return emptyIntersection();
     }
 
-    let point = rayOrigin + rayDirection * t;
-    let local = point - scene.discPos.xyz;
-    let radialDist = length(vec2f(local.x, local.z));
-    let innerRadius = scene.discParams.x;
-    let outerRadius = scene.discParams.y;
-    let innerEdgeBias = scene.blackhole.w * 0.1;
-
-    if (
-        radialDist < innerRadius + innerEdgeBias ||
-        radialDist > outerRadius
-    ) {
-        return emptyIntersection();
-    }
-
-    return Intersection(
-        true,
-        t,
-        point,
-        sampleDisc(rayOrigin, point),
-    );
+    return discIntersectionAtPoint(rayOrigin + rayDirection * t, t);
 }
 
 fn closestIntersection(current: Intersection, candidate: Intersection) -> Intersection {
@@ -567,11 +496,11 @@ fn closestIntersection(current: Intersection, candidate: Intersection) -> Inters
 fn traceStraight(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
     let blackholePos = scene.blackhole.xyz;
     let schwarzschildRadius = scene.blackhole.w;
-    let captureRadius = schwarzschildRadius * 1.035;
+    let shadowRadius = blackholeShadowRadius(schwarzschildRadius);
     let sphereCount = u32(scene.screen.w);
 
     var hit = emptyIntersection();
-    hit = closestIntersection(hit, raySphereIntersection(rayOrigin, rayDirection, blackholePos, captureRadius, vec3f(0.0)));
+    hit = closestIntersection(hit, raySphereIntersection(rayOrigin, rayDirection, blackholePos, shadowRadius, vec3f(0.0)));
     for (var sphereIndex: u32 = 0u; sphereIndex < sphereCount; sphereIndex = sphereIndex + 1u) {
         let sphere = spheres[sphereIndex];
         hit = closestIntersection(
@@ -600,12 +529,8 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
     let captureRadius = schwarzschildRadius * 1.035;
     let sphereCount = u32(scene.screen.w);
     let localOrigin = rayOrigin - blackholePos;
-    let baseRay = ray(localOrigin, rayDirection);
-    var geodesicRay = gRay(baseRay, schwarzschildRadius);
-
-    if (nearGeodesicCoordinateSingularity(geodesicRay)) {
-        return traceStraight(rayOrigin, rayDirection);
-    }
+    let orbitalPlane = buildOrbitalPlane(localOrigin, rayDirection);
+    var geodesicRay = planarGeodesicRay(localOrigin, rayDirection, orbitalPlane, schwarzschildRadius, captureRadius);
 
     let dλ: f32 = scene.geodesicParams.x;
     let maxGeodesicSteps: u32 = u32(scene.geodesicParams.y);
@@ -614,25 +539,21 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
     var previousWorldPoint = rayOrigin;
 
     for (var stepIndex: u32 = 0u; stepIndex < maxGeodesicSteps; stepIndex = stepIndex + 1u) {
+        if (geodesicRay.r <= captureRadius) {
+            return TraceResult(true, vec3f(0.0));
+        }
+
         if (useRungeKutta) {
-            geodesicRay = fourthOrderRungeKutta(geodesicRay, dλ, schwarzschildRadius);
+            geodesicRay = fourthOrderRungeKuttaPlanar(geodesicRay, dλ, schwarzschildRadius, captureRadius);
         } else {
-            geodesicRay = fastGeodesicStep(geodesicRay, dλ, schwarzschildRadius);
-        }
-
-        if (nearGeodesicCoordinateSingularity(geodesicRay)) {
-            return traceStraight(rayOrigin, rayDirection);
-        }
-
-        if (invalidGeodesicRay(geodesicRay)) {
-            return traceStraight(rayOrigin, rayDirection);
+            geodesicRay = fastGeodesicStepPlanar(geodesicRay, dλ, schwarzschildRadius, captureRadius);
         }
 
         if (geodesicRay.r <= captureRadius) {
             return TraceResult(true, vec3f(0.0));
         }
 
-        let currentWorldPoint = worldPoint(geodesicRay, blackholePos);
+        let currentWorldPoint = worldPointPlanar(geodesicRay, orbitalPlane, blackholePos);
 
         var hit = emptyIntersection();
         hit = closestIntersection(hit, segmentSphereIntersection(previousWorldPoint, currentWorldPoint, blackholePos, captureRadius, vec3f(0.0)));
@@ -649,7 +570,7 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
                 ),
             );
         }
-        hit = closestIntersection(hit, segmentDiscIntersection(previousWorldPoint, currentWorldPoint, rayOrigin));
+        hit = closestIntersection(hit, segmentDiscIntersection(previousWorldPoint, currentWorldPoint));
 
         if (hit.collided) {
             return TraceResult(true, hit.color);
@@ -667,36 +588,27 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
 
 @fragment
 fn backgroundFsMain(in: VSOut) -> @location(0) vec4f {
+    return vec4f(sampleBackground(in.uv, cameraRayDirection(in.uv)), 1.0);
+}
+
+fn cameraRayDirection(uv: vec2f) -> vec3f {
     let width = scene.screen.x;
     let height = scene.screen.y;
     let focalLength = scene.screen.z;
 
-    let x = in.uv.x * width - width * 0.5;
-    let y = in.uv.y * height - height * 0.5;
+    let x = uv.x * width - width * 0.5;
+    let y = uv.y * height - height * 0.5;
 
-    let rayDirection = normalize(
+    return normalize(
         scene.cameraRight.xyz * x +
         scene.cameraUp.xyz * (-y) +
         scene.cameraForward.xyz * focalLength
     );
-
-    return vec4f(sampleBackground(in.uv, rayDirection), 1.0);
 }
 
 @fragment
 fn fsMain(in: VSOut) -> @location(0) vec4f {
-    let width = scene.screen.x;
-    let height = scene.screen.y;
-    let focalLength = scene.screen.z;
-
-    let x = in.uv.x * width - width * 0.5;
-    let y = in.uv.y * height - height * 0.5;
-
-    let rayDirection = normalize(
-        scene.cameraRight.xyz * x +
-        scene.cameraUp.xyz * (-y) +
-        scene.cameraForward.xyz * focalLength
-    );
+    let rayDirection = cameraRayDirection(in.uv);
 
     let useGeodesic = scene.geodesicParams.w > 0.5;
     var result = TraceResult(false, vec3f(0.0));

@@ -132,7 +132,7 @@ const DEFAULT_DISPLAY_HEIGHT = canvas.height;
 const CANVAS_DISPLAY_MODE = readCanvasDisplayMode();
 const DISPLAY_WIDTH = CANVAS_DISPLAY_MODE === "fullscreen" ? Math.max(1, Math.floor(window.innerWidth)) : DEFAULT_DISPLAY_WIDTH;
 const DISPLAY_HEIGHT = CANVAS_DISPLAY_MODE === "fullscreen" ? Math.max(1, Math.floor(window.innerHeight)) : DEFAULT_DISPLAY_HEIGHT;
-const RENDER_SCALE = 0.45;
+const RENDER_SCALE = 0.4;
 
 canvas.style.width = `${DISPLAY_WIDTH}px`;
 canvas.style.height = `${DISPLAY_HEIGHT}px`;
@@ -160,12 +160,12 @@ const SAGITTARIUS_A_MASS = worldConf.sagittariusAMass;
 const WORLD_CENTER = worldConf.worldCenter;
 const SCHWARZSCHILD_RADIUS = 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2);
 const EVENT_HORIZON_RADIUS = SCHWARZSCHILD_RADIUS;
-const CAMERA_RADIUS = 27 * SCHWARZSCHILD_RADIUS;
+const CAMERA_RADIUS = 32 * SCHWARZSCHILD_RADIUS;
 const MIN_CAMERA_RADIUS_DIVISOR = 1.4;
 const MAX_CAMERA_RADIUS_MULTIPLIER = 1.5;
-const BASE_GEODESIC_STEP = 5e7 * 1.2;
-const BASE_GEODESIC_MAX_STEPS = 2 ** 14;
-const BASE_ESCAPE_RADIUS_MULTIPLIER = 30;
+const BASE_GEODESIC_STEP = 5e7 * 1.9;
+const BASE_GEODESIC_MAX_STEPS = 2 ** 15;
+const BASE_ESCAPE_RADIUS_MULTIPLIER = 35;
 const REFERENCE_CAMERA_RADIUS = CAMERA_RADIUS;
 
 const blackHole = {
@@ -187,11 +187,11 @@ const camera = {
 
 const disc = {
     pos: blackHole.pos,
-    innerRadius: 1.8 * SCHWARZSCHILD_RADIUS,
-    outerRadius: 2.9 * SCHWARZSCHILD_RADIUS,
+    innerRadius: 3 * SCHWARZSCHILD_RADIUS,
+    outerRadius: 5.1 * SCHWARZSCHILD_RADIUS,
     visible: true,
-    nearColor: rgb(255, 102, 0),
-    farColor: rgb(255, 208, 18),
+    nearColor: rgb(255, 72, 0),
+    farColor: rgb(255, 213, 46),
     radialBoost: rgb(28, 6, 0),
 } satisfies Disc;
 
@@ -206,12 +206,12 @@ const grid = {
     visible: true,
     pos: vec3(
         blackHole.pos.x,
-        blackHole.pos.y - 2.8 * SCHWARZSCHILD_RADIUS,
+        blackHole.pos.y - 3.8 * SCHWARZSCHILD_RADIUS,
         blackHole.pos.z,
     ),
-    halfSize: 3.5 * SCHWARZSCHILD_RADIUS,
+    halfSize: 4.6 * SCHWARZSCHILD_RADIUS,
     cellSize: 0.35 * SCHWARZSCHILD_RADIUS,
-    maxDrop: 2.5 * SCHWARZSCHILD_RADIUS,
+    maxDrop: 2.8 * SCHWARZSCHILD_RADIUS,
     lineColor: rgb(255, 255, 255),
 } satisfies Grid;
 
@@ -246,17 +246,17 @@ const worldObjects: renderObjects = {
     grid,
     spheres: [
         {
-            pos: vec3(-6.5 * SCHWARZSCHILD_RADIUS, 0, 4*SCHWARZSCHILD_RADIUS),
-            radius: 0.5 * SCHWARZSCHILD_RADIUS,
+            pos: vec3(-8.5 * SCHWARZSCHILD_RADIUS, 0, 5*SCHWARZSCHILD_RADIUS),
+            radius: 0.7 * SCHWARZSCHILD_RADIUS,
             emission: rgb(196, 0, 0),
         },
         {
-            pos: vec3(0, 0, 9*SCHWARZSCHILD_RADIUS),
-            radius: 1.7 * SCHWARZSCHILD_RADIUS,
+            pos: vec3(0, 0, 12*SCHWARZSCHILD_RADIUS),
+            radius: 2.1 * SCHWARZSCHILD_RADIUS,
             emission: rgb(115, 0, 255),
         },
         {
-            pos: vec3(-20 * SCHWARZSCHILD_RADIUS, 4 * SCHWARZSCHILD_RADIUS, -14*SCHWARZSCHILD_RADIUS),
+            pos: vec3(-20 * SCHWARZSCHILD_RADIUS, 8 * SCHWARZSCHILD_RADIUS, -14*SCHWARZSCHILD_RADIUS),
             radius: 3 * SCHWARZSCHILD_RADIUS,
             emission: rgb(232, 213, 255),
         },

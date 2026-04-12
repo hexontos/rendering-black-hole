@@ -197,6 +197,10 @@ const traceBackgroundGrid = (_origin: Vector3, _direction: Vector3): Vector3 | n
     return null;
 };
 
+const blackholeShadowRadius = (blackhole: BlackHole): number => {
+    return 0.5 * Math.sqrt(27.0) * blackhole.schwarzschildRadius;
+};
+
 const intersection = (origin: Vector3, direction: Vector3, objects: RenderOBJ[]): INTERSECTION => {
     let minDist: number = Infinity;
     let closestIntersection: Extract<INTERSECTION, { collided: true }> | undefined;
@@ -260,7 +264,11 @@ const intersection = (origin: Vector3, direction: Vector3, objects: RenderOBJ[])
 };
 
 const trace = (origin: Vector3, direction: Vector3, worldObjects: renderObjects): Vector3 | null => {
-    const hit = intersection(origin, direction, [worldObjects.blackhole, ...worldObjects.spheres]);
+    const hit = intersection(
+        origin,
+        direction,
+        [{ ...worldObjects.blackhole, radius: blackholeShadowRadius(worldObjects.blackhole) }, ...worldObjects.spheres],
+    );
     const discHit = intersectDisc(origin, direction, worldObjects.disc);
 
     if (discHit.collided && (!hit.collided || discHit.dist < hit.dist)) {
