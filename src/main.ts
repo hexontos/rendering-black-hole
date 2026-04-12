@@ -2,14 +2,142 @@ import gpuPipelineShaderSource from "./gpuPipeline.wgsl";
 import { cameraForward, cameraRight, cameraUp, orbitCamera, rgb, vec3 } from "./common";
 import { cpuPipeline } from "./cpuPipeline";
 import { gpuGridVertices } from "./gpuGrid";
-import { handleCameraKeyArrows, handleCameraMouseDrag, handleCameraWheelZoom } from "./input";
-import type { BackgroundMode, BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjects } from "./types";
+import { createHintPanel } from "./hintPanel";
+import {
+    handleCameraKeyArrows,
+    handleGeodesicToggleKey,
+    handleCameraMouseDrag,
+    handleSceneToggleKeys,
+    handleCameraWheelZoom,
+    installConsoleCommands,
+} from "./input";
+import type { BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjects } from "./types";
+
+type AppMode = "main" | "sim2d" | "rayRender3d";
+type RenderPipeline = "cpu" | "gpu";
+type MainSimulationReloadState = {
+    discVisible: boolean;
+    gridVisible: boolean;
+    backgroundMode: renderObjects["background"]["mode"];
+    milkyWayVisible: boolean;
+    useRungeKutta: boolean;
+    cpuRunGeodesic: boolean;
+    gpuRunGeodesic: boolean;
+    spheres: renderObjects["spheres"];
+    hiddenSpheres: renderObjects["spheres"] | null;
+};
+
+const APP_MODE_NAME = "blackhole.appMode";
+const RENDER_PIPELINE_NAME = "blackhole.renderPipeline";
+const CANVAS_DISPLAY_MODE_NAME = "blackhole.canvasDisplayMode";
+const OVERLAY_VISIBILITY_NAME = "blackhole.overlayVisibility";
+const MAIN_SIMULATION_STATE_NAME = "blackhole.mainSimulationState";
+
+const readAndClearStorageValue = (storage: Storage, name: string): string | null => {
+    const value = storage.getItem(name);
+    storage.removeItem(name);
+    return value;
+};
+
+const readAppMode = (): AppMode => {
+    const appMode = localStorage.getItem(APP_MODE_NAME);
+
+    if (appMode === "sim2d" || appMode === "rayRender3d" || appMode === "main") {
+        return appMode;
+    }
+
+    return "main";
+};
+
+const readRenderPipeline = (): RenderPipeline => {
+    const renderPipeline = readAndClearStorageValue(localStorage, RENDER_PIPELINE_NAME);
+
+    if (renderPipeline === "cpu" || renderPipeline === "gpu") {
+        return renderPipeline;
+    }
+
+    return "gpu";
+};
+
+const reloadWithAppMode = (mode: AppMode): void => {
+    localStorage.setItem(APP_MODE_NAME, mode);
+    window.location.reload();
+};
+
+const readMainSimulationReloadState = (): MainSimulationReloadState | null => {
+    const storedState = readAndClearStorageValue(sessionStorage, MAIN_SIMULATION_STATE_NAME);
+    if (storedState == null) return null;
+
+    try {
+        return JSON.parse(storedState) as MainSimulationReloadState;
+    } catch {
+        return null;
+    }
+};
+
+const readOverlayVisibility = (): boolean => {
+    const storedOverlayVisibility = readAndClearStorageValue(sessionStorage, OVERLAY_VISIBILITY_NAME);
+
+    return storedOverlayVisibility !== "hidden";
+};
+
+const prepareOverlayReloadVisibility = (visible: boolean): void => {
+    if (!visible) {
+        sessionStorage.setItem(OVERLAY_VISIBILITY_NAME, "hidden");
+        return;
+    }
+
+    sessionStorage.removeItem(OVERLAY_VISIBILITY_NAME);
+};
+
+const reloadWithRenderPipeline = (renderPipeline: RenderPipeline, overlayVisible: boolean): void => {
+    prepareOverlayReloadVisibility(overlayVisible);
+    localStorage.setItem(APP_MODE_NAME, "main");
+    localStorage.setItem(RENDER_PIPELINE_NAME, renderPipeline);
+    window.location.reload();
+};
+
+const readCanvasDisplayMode = (): "default" | "fullscreen" => {
+    const storedDisplayMode = readAndClearStorageValue(sessionStorage, CANVAS_DISPLAY_MODE_NAME);
+
+    if (storedDisplayMode === "fullscreen") {
+        return "fullscreen";
+    }
+
+    return "default";
+};
+
+const reloadWithCanvasDisplayMode = (
+    displayMode: "default" | "fullscreen",
+    overlayVisible: boolean,
+    renderPipeline: RenderPipeline,
+): void => {
+    prepareOverlayReloadVisibility(overlayVisible);
+    if (renderPipeline === "cpu") {
+        localStorage.setItem(RENDER_PIPELINE_NAME, "cpu");
+    } else {
+        localStorage.removeItem(RENDER_PIPELINE_NAME);
+    }
+    sessionStorage.setItem(CANVAS_DISPLAY_MODE_NAME, displayMode);
+    window.location.reload();
+};
 
 const canvasElement = document.getElementById("blackhole-canvas");
 
 if (!(canvasElement instanceof HTMLCanvasElement)) throw new Error("Canvas element #blackhole-canvas was not found....");
 
 const canvas = canvasElement;
+const DEFAULT_DISPLAY_WIDTH = canvas.width;
+const DEFAULT_DISPLAY_HEIGHT = canvas.height;
+const CANVAS_DISPLAY_MODE = readCanvasDisplayMode();
+const DISPLAY_WIDTH = CANVAS_DISPLAY_MODE === "fullscreen" ? Math.max(1, Math.floor(window.innerWidth)) : DEFAULT_DISPLAY_WIDTH;
+const DISPLAY_HEIGHT = CANVAS_DISPLAY_MODE === "fullscreen" ? Math.max(1, Math.floor(window.innerHeight)) : DEFAULT_DISPLAY_HEIGHT;
+const RENDER_SCALE = 0.4;
+
+canvas.style.width = `${DISPLAY_WIDTH}px`;
+canvas.style.height = `${DISPLAY_HEIGHT}px`;
+canvas.width = Math.max(1, Math.round(DISPLAY_WIDTH * RENDER_SCALE));
+canvas.height = Math.max(1, Math.round(DISPLAY_HEIGHT * RENDER_SCALE));
 
 const worldConf = {
     screenWidth: canvas.width,
@@ -32,7 +160,13 @@ const SAGITTARIUS_A_MASS = worldConf.sagittariusAMass;
 const WORLD_CENTER = worldConf.worldCenter;
 const SCHWARZSCHILD_RADIUS = 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2);
 const EVENT_HORIZON_RADIUS = SCHWARZSCHILD_RADIUS;
-const CAMERA_RADIUS = 8 * SCHWARZSCHILD_RADIUS;
+const CAMERA_RADIUS = 32 * SCHWARZSCHILD_RADIUS;
+const MIN_CAMERA_RADIUS_DIVISOR = 1.4;
+const MAX_CAMERA_RADIUS_MULTIPLIER = 1.5;
+const BASE_GEODESIC_STEP = 5e7 * 1.9;
+const BASE_GEODESIC_MAX_STEPS = 2 ** 15;
+const BASE_ESCAPE_RADIUS_MULTIPLIER = 35;
+const REFERENCE_CAMERA_RADIUS = CAMERA_RADIUS;
 
 const blackHole = {
     pos: WORLD_CENTER,
@@ -41,8 +175,6 @@ const blackHole = {
     gravity: G * SAGITTARIUS_A_MASS,
     radius: EVENT_HORIZON_RADIUS,
     emission: rgb(0, 0, 0),
-    reflectivity: rgb(0, 0, 0),
-    roughness: 0,
 } satisfies BlackHole;
 
 const camera = {
@@ -55,31 +187,31 @@ const camera = {
 
 const disc = {
     pos: blackHole.pos,
-    innerRadius: 1.8 * SCHWARZSCHILD_RADIUS,
-    outerRadius: 2.7 * SCHWARZSCHILD_RADIUS,
+    innerRadius: 3 * SCHWARZSCHILD_RADIUS,
+    outerRadius: 5.1 * SCHWARZSCHILD_RADIUS,
     visible: true,
-    noiseVisible: false,
-    noiseDensity: 0.1, // 0...1
-    nearColor: rgb(255, 102, 0),
-    farColor: rgb(255, 208, 18),
+    nearColor: rgb(255, 72, 0),
+    farColor: rgb(255, 213, 46),
     radialBoost: rgb(28, 6, 0),
 } satisfies Disc;
 
 const renderGeodesic = {
-    dλ: 5e7, // previously faster option was dλ: 1e8 and maxSteps 4096, but blackhole has weird noise outside vertically
-    maxSteps: 8192,
-    escapeRadiusMultiplier: 30,
+    dλ: BASE_GEODESIC_STEP,
+    maxSteps: BASE_GEODESIC_MAX_STEPS,
+    escapeRadiusMultiplier: BASE_ESCAPE_RADIUS_MULTIPLIER,
+    useRungeKutta: false,
 } satisfies renderObjects["renderGeodesic"];
 
 const grid = {
+    visible: true,
     pos: vec3(
         blackHole.pos.x,
-        blackHole.pos.y - 2.4 * SCHWARZSCHILD_RADIUS,
+        blackHole.pos.y - 3.8 * SCHWARZSCHILD_RADIUS,
         blackHole.pos.z,
     ),
-    halfSize: 3.5 * SCHWARZSCHILD_RADIUS,
+    halfSize: 4.6 * SCHWARZSCHILD_RADIUS,
     cellSize: 0.35 * SCHWARZSCHILD_RADIUS,
-    maxDrop: 2.5 * SCHWARZSCHILD_RADIUS,
+    maxDrop: 2.8 * SCHWARZSCHILD_RADIUS,
     lineColor: rgb(255, 255, 255),
 } satisfies Grid;
 
@@ -114,39 +246,31 @@ const worldObjects: renderObjects = {
     grid,
     spheres: [
         {
-            pos: vec3(-6.5 * SCHWARZSCHILD_RADIUS, 0, 4*SCHWARZSCHILD_RADIUS),
-            radius: 1.2 * SCHWARZSCHILD_RADIUS,
+            pos: vec3(-8.5 * SCHWARZSCHILD_RADIUS, 0, 5*SCHWARZSCHILD_RADIUS),
+            radius: 0.7 * SCHWARZSCHILD_RADIUS,
             emission: rgb(196, 0, 0),
-            reflectivity: rgb(0.25, 1, 0.76), // normalized 0..1 per channel
-            roughness: 3,
         },
         {
-            pos: vec3(-10.5 * SCHWARZSCHILD_RADIUS, 0, 7*SCHWARZSCHILD_RADIUS),
-            radius: 1.7 * SCHWARZSCHILD_RADIUS,
+            pos: vec3(0, 0, 12*SCHWARZSCHILD_RADIUS),
+            radius: 2.1 * SCHWARZSCHILD_RADIUS,
             emission: rgb(115, 0, 255),
-            reflectivity: rgb(0, 0, 0),
-            roughness: 0,
         },
         {
-            pos: vec3(-9 * SCHWARZSCHILD_RADIUS, 0, -14*SCHWARZSCHILD_RADIUS),
-            radius: 1.7 * SCHWARZSCHILD_RADIUS,
+            pos: vec3(-30 * SCHWARZSCHILD_RADIUS, -3 * SCHWARZSCHILD_RADIUS, -7*SCHWARZSCHILD_RADIUS),
+            radius: 3 * SCHWARZSCHILD_RADIUS,
             emission: rgb(232, 213, 255),
-            reflectivity: rgb(1, 0, 1),
-            roughness: 10,
         },
     ],
 };
 
-const runtimeFlags = globalThis as typeof globalThis & {
-    runGeodesic?: boolean;
-    renderDisc?: boolean;
-    backgroundMode?: string;
+const runtimeSettings = {
+    cpuRunGeodesic: true,
+    gpuRunGeodesic: true,
 };
-runtimeFlags.runGeodesic = runtimeFlags.runGeodesic ?? false;
-runtimeFlags.renderDisc = runtimeFlags.renderDisc ?? true;
-runtimeFlags.backgroundMode = runtimeFlags.backgroundMode ?? worldObjects.background.mode;
+let activeRenderPipeline: RenderPipeline = "gpu";
+let hiddenSpheres: renderObjects["spheres"] | null = null;
 
-const gpuSceneData = new Float32Array(22 * 4);
+const gpuSceneData = new Float32Array(23 * 4);
 const GPU_SPHERE_FLOATS = 8;
 
 const fpsOverlay = document.createElement("div");
@@ -158,24 +282,32 @@ fpsOverlay.style.background = "rgba(0, 0, 0, 0.65)";
 fpsOverlay.style.color = "#ffffff";
 fpsOverlay.style.fontFamily = "monospace";
 fpsOverlay.style.fontSize = "12px";
+fpsOverlay.style.whiteSpace = "pre";
 fpsOverlay.style.zIndex = "9999";
-fpsOverlay.textContent = "FPS: --";
+fpsOverlay.textContent = "FPS: --\nRender: --\nComputation: --";
 document.body.appendChild(fpsOverlay);
+let overlayVisible = readOverlayVisibility();
+const hintPanel = createHintPanel(fpsOverlay);
 
 let fpsFrames = 0;
 let fpsLastTime = performance.now();
 
-const reportFrame = (backend: string): void => {
+const reportFrame = (render: string, computation: string): void => {
     fpsFrames += 1;
     const now = performance.now();
     const elapsed = now - fpsLastTime;
 
     if (elapsed >= 1000) {
         const fps = fpsFrames * 1000 / elapsed;
-        fpsOverlay.textContent = `FPS: ${fps.toFixed(1)} (${backend})`;
+        fpsOverlay.textContent = `FPS: ${fps.toFixed(1)} (approx.)\nRender: ${render}\nComputation: ${computation}`;
         fpsFrames = 0;
         fpsLastTime = now;
     }
+};
+
+const currentComputationLabel = (runGeodesic: boolean): string => {
+    if (!runGeodesic) return "Straight ray";
+    return worldObjects.renderGeodesic.useRungeKutta ? "Geodesic (Runge-Kutta)" : "Geodesic (Fast)";
 };
 
 const gpuBackgroundModeValue = (mode: string | undefined): number => {
@@ -184,11 +316,18 @@ const gpuBackgroundModeValue = (mode: string | undefined): number => {
     return 2;
 };
 
-const runtimeBackgroundMode = (mode: string | undefined, fallback: BackgroundMode): BackgroundMode => {
-    if (mode === "empty" || mode === "gradient" || mode === "stars") {
-        return mode;
-    }
-    return fallback;
+const currentWorldObjects = (camera: Camera): renderObjects => {
+    const renderGeodesicScale = camera.radius / REFERENCE_CAMERA_RADIUS;
+
+    return {
+        ...worldObjects,
+        renderGeodesic: {
+            ...worldObjects.renderGeodesic,
+            dλ: worldObjects.renderGeodesic.dλ * renderGeodesicScale,
+            maxSteps: Math.max(1, Math.round(worldObjects.renderGeodesic.maxSteps * renderGeodesicScale)),
+            escapeRadiusMultiplier: worldObjects.renderGeodesic.escapeRadiusMultiplier * renderGeodesicScale,
+        },
+    };
 };
 
 const mouseDrag: MouseDrag = {
@@ -197,57 +336,162 @@ const mouseDrag: MouseDrag = {
     lastY: 0,
 };
 
-const MIN_CAMERA_RADIUS = CAMERA_RADIUS / 1.2;
-const MAX_CAMERA_RADIUS = CAMERA_RADIUS * 2;
+let requestMainRender = (): void => {};
 
-window.addEventListener("keydown", (event) => {
-    handleCameraKeyArrows(event, camera);
-});
+const MIN_CAMERA_RADIUS = CAMERA_RADIUS / MIN_CAMERA_RADIUS_DIVISOR;
+const MAX_CAMERA_RADIUS = CAMERA_RADIUS * MAX_CAMERA_RADIUS_MULTIPLIER;
 
-canvas.addEventListener("mousedown", (event) => {
-    mouseDrag.active = true;
-    mouseDrag.lastX = event.clientX;
-    mouseDrag.lastY = event.clientY;
-});
+const applyOverlayVisibility = (visible: boolean): void => {
+    overlayVisible = visible;
+    fpsOverlay.style.display = overlayVisible ? "block" : "none";
+    hintPanel.setOverlayVisible(overlayVisible);
+};
 
-window.addEventListener("mousemove", (event) => {
-    handleCameraMouseDrag(event, camera, mouseDrag);
-});
+applyOverlayVisibility(overlayVisible);
 
-canvas.addEventListener("wheel", (event) => {
-    handleCameraWheelZoom(event, camera, MIN_CAMERA_RADIUS, MAX_CAMERA_RADIUS);
-}, { passive: false });
+const applyMainSimulationReloadState = (mainSimulationReloadState: MainSimulationReloadState | null): void => {
+    if (mainSimulationReloadState == null) return;
 
-window.addEventListener("mouseup", () => {
-    mouseDrag.active = false;
-});
+    worldObjects.disc.visible = mainSimulationReloadState.discVisible;
+    worldObjects.grid.visible = mainSimulationReloadState.gridVisible;
+    worldObjects.background.mode = mainSimulationReloadState.backgroundMode;
+    worldObjects.background.stars.milkyWayVisible = mainSimulationReloadState.milkyWayVisible;
+    worldObjects.renderGeodesic.useRungeKutta = mainSimulationReloadState.useRungeKutta;
+    worldObjects.spheres = mainSimulationReloadState.spheres;
+    runtimeSettings.cpuRunGeodesic = mainSimulationReloadState.cpuRunGeodesic;
+    runtimeSettings.gpuRunGeodesic = mainSimulationReloadState.gpuRunGeodesic;
+    hiddenSpheres = mainSimulationReloadState.hiddenSpheres;
+};
+
+const persistMainSimulationReloadState = (): void => {
+    const mainSimulationReloadState: MainSimulationReloadState = {
+        discVisible: worldObjects.disc.visible,
+        gridVisible: worldObjects.grid.visible,
+        backgroundMode: worldObjects.background.mode,
+        milkyWayVisible: worldObjects.background.stars.milkyWayVisible,
+        useRungeKutta: worldObjects.renderGeodesic.useRungeKutta,
+        cpuRunGeodesic: runtimeSettings.cpuRunGeodesic,
+        gpuRunGeodesic: runtimeSettings.gpuRunGeodesic,
+        spheres: worldObjects.spheres,
+        hiddenSpheres,
+    };
+
+    sessionStorage.setItem(MAIN_SIMULATION_STATE_NAME, JSON.stringify(mainSimulationReloadState));
+};
+
+const toggleSphereVisibility = (): void => {
+    if (hiddenSpheres == null) {
+        hiddenSpheres = worldObjects.spheres;
+        worldObjects.spheres = [
+            {
+                pos: vec3(0, 0, 0),
+                radius: 0,
+                emission: rgb(0, 0, 0),
+            },
+        ];
+        return;
+    }
+
+    worldObjects.spheres = hiddenSpheres;
+    hiddenSpheres = null;
+};
+
+const toggleGeodesicEnabled = (): void => {
+    const nextRunGeodesic = !runtimeSettings.cpuRunGeodesic;
+    runtimeSettings.cpuRunGeodesic = nextRunGeodesic;
+    runtimeSettings.gpuRunGeodesic = nextRunGeodesic;
+};
+
+const toggleCanvasDisplayMode = (): void => {
+    persistMainSimulationReloadState();
+    reloadWithCanvasDisplayMode(
+        CANVAS_DISPLAY_MODE === "default" ? "fullscreen" : "default",
+        overlayVisible,
+        activeRenderPipeline,
+    );
+};
+
+const toggleRenderPipeline = (): void => {
+    persistMainSimulationReloadState();
+    reloadWithRenderPipeline(activeRenderPipeline === "gpu" ? "cpu" : "gpu", overlayVisible);
+};
+
+const toggleOverlayVisibility = (): void => {
+    applyOverlayVisibility(!overlayVisible);
+};
+
+const installMainInputHandlers = (): void => {
+    window.addEventListener("keydown", (event) => {
+        const cameraChanged = handleCameraKeyArrows(event, camera);
+        const computationChanged = handleGeodesicToggleKey(event, worldObjects.renderGeodesic);
+        const sceneChanged = handleSceneToggleKeys(event, worldObjects, {
+            toggleRenderPipeline,
+            toggleCanvasSize: toggleCanvasDisplayMode,
+            toggleSpheres: toggleSphereVisibility,
+            toggleGeodesicEnabled,
+            toggleOverlayVisibility,
+        });
+
+        if (cameraChanged || computationChanged || sceneChanged) {
+            requestMainRender();
+        }
+    });
+
+    canvas.addEventListener("mousedown", (event) => {
+        mouseDrag.active = true;
+        mouseDrag.lastX = event.clientX;
+        mouseDrag.lastY = event.clientY;
+    });
+
+    window.addEventListener("mousemove", (event) => {
+        if (handleCameraMouseDrag(event, camera, mouseDrag)) {
+            requestMainRender();
+        }
+    });
+
+    canvas.addEventListener("wheel", (event) => {
+        if (handleCameraWheelZoom(event, camera, MIN_CAMERA_RADIUS, MAX_CAMERA_RADIUS)) {
+            requestMainRender();
+        }
+    }, { passive: false });
+
+    window.addEventListener("mouseup", () => {
+        mouseDrag.active = false;
+    });
+};
 
 const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
+    activeRenderPipeline = "cpu";
     const context = canvas.getContext("2d");
 
     if (context == null) throw new Error("2D canvas context could not be created....");
 
     const ctx = context as CanvasRenderingContext2D;
     const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
-    const FPS = 30;
+    let renderQueued = false;
 
     console.log("WebGPU unavailable. Defaulted to CPU pipeline renderer.");
-    console.log("CPU geodesic raytracing is OFF by default.");
-    console.log("Run `runGeodesic = true` in the console to enable it.");
-    console.log("Run `renderDisc = false` in the console to hide the disc.");
-    console.log('Run `backgroundMode = "gradient"` or `backgroundMode = "empty"` in the console to switch the background.');
+    console.log("Run `help()` in the console to see available commands.");
+    console.log("Press `1` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
 
-    window.setInterval(() => {
-        worldObjects.disc.visible = runtimeFlags.renderDisc ?? true;
-        worldObjects.background.mode = runtimeBackgroundMode(runtimeFlags.backgroundMode, worldObjects.background.mode);
-        cpuPipeline(ctx, image, camera, worldObjects, worldConf, runtimeFlags.runGeodesic ?? false);
-        //console.log("Completed CPU render cycle.");
-        reportFrame(runtimeFlags.runGeodesic ?? false ? "CPU geodesic" : "CPU");
-    }, 1000 / FPS);
+    const renderFrame = (): void => {
+        renderQueued = false;
+        cpuPipeline(ctx, image, camera, currentWorldObjects(camera), worldConf, runtimeSettings.cpuRunGeodesic);
+        reportFrame("CPU", currentComputationLabel(runtimeSettings.cpuRunGeodesic));
+    };
+
+    requestMainRender = () => {
+        if (renderQueued) return;
+        renderQueued = true;
+        requestAnimationFrame(renderFrame);
+    };
+
+    requestMainRender();
 };
 
 const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> => {
     try {
+        activeRenderPipeline = "gpu";
         if (!navigator.gpu) return false;
 
         const adapter = await navigator.gpu.requestAdapter();
@@ -383,18 +627,20 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             ],
         });
 
+        let renderQueued = false;
+
         const frame = (): void => {
-            worldObjects.disc.visible = runtimeFlags.renderDisc ?? true;
-            worldObjects.background.mode = runtimeBackgroundMode(runtimeFlags.backgroundMode, worldObjects.background.mode);
+            renderQueued = false;
+            const renderWorldObjects = currentWorldObjects(camera);
             const cameraPos = orbitCamera(camera);
             const forward = cameraForward(cameraPos, camera);
             const right = cameraRight(forward);
             const up = cameraUp(forward, right);
-            const sphereData = new Float32Array(Math.max(worldObjects.spheres.length * GPU_SPHERE_FLOATS, 4));
-            const gridVertices = gpuGridVertices(camera, worldObjects, SCREEN_WIDTH, SCREEN_HEIGHT);
+            const sphereData = new Float32Array(Math.max(renderWorldObjects.spheres.length * GPU_SPHERE_FLOATS, 4));
+            const gridVertices = gpuGridVertices(camera, renderWorldObjects, SCREEN_WIDTH, SCREEN_HEIGHT);
 
-            for (let sphereIndex = 0; sphereIndex < worldObjects.spheres.length; sphereIndex++) {
-                const sphere = worldObjects.spheres[sphereIndex];
+            for (let sphereIndex = 0; sphereIndex < renderWorldObjects.spheres.length; sphereIndex++) {
+                const sphere = renderWorldObjects.spheres[sphereIndex];
                 if (sphere == null) continue;
                 const base = sphereIndex * GPU_SPHERE_FLOATS;
                 sphereData.set([sphere.pos.x, sphere.pos.y, sphere.pos.z, sphere.radius], base);
@@ -441,99 +687,100 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             gpuSceneData.set([forward.x, forward.y, forward.z, 0], 4);
             gpuSceneData.set([right.x, right.y, right.z, 0], 8);
             gpuSceneData.set([up.x, up.y, up.z, 0], 12);
-            gpuSceneData.set([SCREEN_WIDTH, SCREEN_HEIGHT, camera.focalLength, worldObjects.spheres.length], 16);
+            gpuSceneData.set([SCREEN_WIDTH, SCREEN_HEIGHT, camera.focalLength, renderWorldObjects.spheres.length], 16);
             gpuSceneData.set([blackHole.pos.x, blackHole.pos.y, blackHole.pos.z, blackHole.schwarzschildRadius], 20);
-            gpuSceneData.set([worldObjects.disc.pos.x, worldObjects.disc.pos.y, worldObjects.disc.pos.z, 0], 24);
+            gpuSceneData.set([renderWorldObjects.disc.pos.x, renderWorldObjects.disc.pos.y, renderWorldObjects.disc.pos.z, 0], 24);
             gpuSceneData.set([
-                worldObjects.disc.innerRadius,
-                worldObjects.disc.outerRadius,
-                worldObjects.disc.visible ? 1 : 0,
-                worldObjects.disc.noiseVisible ? 1 : 0,
+                renderWorldObjects.disc.innerRadius,
+                renderWorldObjects.disc.outerRadius,
+                renderWorldObjects.disc.visible ? 1 : 0,
+                0,
             ], 28);
             gpuSceneData.set([
-                worldObjects.disc.nearColor.r / 255,
-                worldObjects.disc.nearColor.g / 255,
-                worldObjects.disc.nearColor.b / 255,
+                renderWorldObjects.disc.nearColor.r / 255,
+                renderWorldObjects.disc.nearColor.g / 255,
+                renderWorldObjects.disc.nearColor.b / 255,
                 0,
             ], 32);
             gpuSceneData.set([
-                worldObjects.disc.farColor.r / 255,
-                worldObjects.disc.farColor.g / 255,
-                worldObjects.disc.farColor.b / 255,
+                renderWorldObjects.disc.farColor.r / 255,
+                renderWorldObjects.disc.farColor.g / 255,
+                renderWorldObjects.disc.farColor.b / 255,
                 0,
             ], 36);
             gpuSceneData.set([
-                worldObjects.disc.radialBoost.r / 255,
-                worldObjects.disc.radialBoost.g / 255,
-                worldObjects.disc.radialBoost.b / 255,
-                worldObjects.disc.noiseDensity,
-            ], 40);
-            gpuSceneData.set([
-                worldObjects.grid.lineColor.r / 255,
-                worldObjects.grid.lineColor.g / 255,
-                worldObjects.grid.lineColor.b / 255,
+                renderWorldObjects.disc.radialBoost.r / 255,
+                renderWorldObjects.disc.radialBoost.g / 255,
+                renderWorldObjects.disc.radialBoost.b / 255,
                 0,
-            ], 44);
+            ], 40);
+            gpuSceneData.set([renderWorldObjects.grid.lineColor.r / 255, renderWorldObjects.grid.lineColor.g / 255, renderWorldObjects.grid.lineColor.b / 255, 0], 44);
             gpuSceneData.set([
-                gpuBackgroundModeValue(worldObjects.background.mode),
-                worldObjects.background.stars.densityPrimary,
-                worldObjects.background.stars.densitySecondary,
+                gpuBackgroundModeValue(renderWorldObjects.background.mode),
+                renderWorldObjects.background.stars.densityPrimary,
+                renderWorldObjects.background.stars.densitySecondary,
                 0,
             ], 48);
             gpuSceneData.set([
-                worldObjects.background.stars.baseColor.r / 255,
-                worldObjects.background.stars.baseColor.g / 255,
-                worldObjects.background.stars.baseColor.b / 255,
+                renderWorldObjects.background.stars.baseColor.r / 255,
+                renderWorldObjects.background.stars.baseColor.g / 255,
+                renderWorldObjects.background.stars.baseColor.b / 255,
                 0,
             ], 52);
             gpuSceneData.set([
-                worldObjects.background.empty.color.r / 255,
-                worldObjects.background.empty.color.g / 255,
-                worldObjects.background.empty.color.b / 255,
+                renderWorldObjects.background.empty.color.r / 255,
+                renderWorldObjects.background.empty.color.g / 255,
+                renderWorldObjects.background.empty.color.b / 255,
                 0,
             ], 56);
             gpuSceneData.set([
-                worldObjects.background.gradient.topLeft.r / 255,
-                worldObjects.background.gradient.topLeft.g / 255,
-                worldObjects.background.gradient.topLeft.b / 255,
+                renderWorldObjects.background.gradient.topLeft.r / 255,
+                renderWorldObjects.background.gradient.topLeft.g / 255,
+                renderWorldObjects.background.gradient.topLeft.b / 255,
                 0,
             ], 60);
             gpuSceneData.set([
-                worldObjects.background.gradient.topRight.r / 255,
-                worldObjects.background.gradient.topRight.g / 255,
-                worldObjects.background.gradient.topRight.b / 255,
+                renderWorldObjects.background.gradient.topRight.r / 255,
+                renderWorldObjects.background.gradient.topRight.g / 255,
+                renderWorldObjects.background.gradient.topRight.b / 255,
                 0,
             ], 64);
             gpuSceneData.set([
-                worldObjects.background.gradient.bottomLeft.r / 255,
-                worldObjects.background.gradient.bottomLeft.g / 255,
-                worldObjects.background.gradient.bottomLeft.b / 255,
+                renderWorldObjects.background.gradient.bottomLeft.r / 255,
+                renderWorldObjects.background.gradient.bottomLeft.g / 255,
+                renderWorldObjects.background.gradient.bottomLeft.b / 255,
                 0,
             ], 68);
             gpuSceneData.set([
-                worldObjects.background.gradient.bottomRight.r / 255,
-                worldObjects.background.gradient.bottomRight.g / 255,
-                worldObjects.background.gradient.bottomRight.b / 255,
+                renderWorldObjects.background.gradient.bottomRight.r / 255,
+                renderWorldObjects.background.gradient.bottomRight.g / 255,
+                renderWorldObjects.background.gradient.bottomRight.b / 255,
                 0,
             ], 72);
             gpuSceneData.set([
-                worldObjects.background.stars.milkyWayNormal.x,
-                worldObjects.background.stars.milkyWayNormal.y,
-                worldObjects.background.stars.milkyWayNormal.z,
-                worldObjects.background.stars.milkyWayWidth,
+                renderWorldObjects.background.stars.milkyWayNormal.x,
+                renderWorldObjects.background.stars.milkyWayNormal.y,
+                renderWorldObjects.background.stars.milkyWayNormal.z,
+                renderWorldObjects.background.stars.milkyWayWidth,
             ], 76);
             gpuSceneData.set([
-                worldObjects.background.stars.milkyWayColor.r / 255,
-                worldObjects.background.stars.milkyWayColor.g / 255,
-                worldObjects.background.stars.milkyWayColor.b / 255,
-                worldObjects.background.stars.milkyWayVisible ? worldObjects.background.stars.milkyWayIntensity : 0,
+                renderWorldObjects.background.stars.milkyWayColor.r / 255,
+                renderWorldObjects.background.stars.milkyWayColor.g / 255,
+                renderWorldObjects.background.stars.milkyWayColor.b / 255,
+                renderWorldObjects.background.stars.milkyWayVisible ? renderWorldObjects.background.stars.milkyWayIntensity : 0,
             ], 80);
             gpuSceneData.set([
-                worldObjects.renderGeodesic.dλ,
-                worldObjects.renderGeodesic.maxSteps,
-                worldObjects.renderGeodesic.escapeRadiusMultiplier,
-                0,
+                renderWorldObjects.renderGeodesic.dλ,
+                renderWorldObjects.renderGeodesic.maxSteps,
+                renderWorldObjects.renderGeodesic.escapeRadiusMultiplier,
+                runtimeSettings.gpuRunGeodesic ? 1 : 0,
             ], 84);
+            gpuSceneData.set([
+                renderWorldObjects.renderGeodesic.useRungeKutta ? 1 : 0,
+                0,
+                0,
+                0,
+            ], 88);
 
             device.queue.writeBuffer(uniformBuffer, 0, gpuSceneData);
             device.queue.writeBuffer(sphereBuffer, 0, sphereData);
@@ -570,14 +817,19 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             pass.end();
 
             device.queue.submit([encoder.finish()]);
-            reportFrame("GPU");
+            reportFrame("GPU", currentComputationLabel(runtimeSettings.gpuRunGeodesic));
+        };
+
+        requestMainRender = () => {
+            if (renderQueued) return;
+            renderQueued = true;
             requestAnimationFrame(frame);
         };
 
         console.log("WebGPU renderer active. GPU goes brbrbrbr....");
-        console.log('GPU background defaults to stars. Run `backgroundMode = "gradient"` or `backgroundMode = "empty"` in the console to switch it.');
-        //console.log("Completed GPU render cycle.");
-        requestAnimationFrame(frame);
+        console.log("Run `help()` in the console to see available commands.");
+        console.log("Press `1` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
+        requestMainRender();
         return true;
     } catch (error) {
         console.error("WebGPU initialization failed -> falling back to CPU.", error);
@@ -585,7 +837,31 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
     }
 };
 
-const initRenderer = async (): Promise<void> => {
+const installAppConsoleCommands = (mainSimulationWorldObjects?: renderObjects, requestRender: () => void = () => {}): void => {
+    installConsoleCommands({
+        requestRender,
+        runDemo: (demoName) => {
+            reloadWithAppMode(demoName);
+        },
+        runBlackholeSimulation: () => {
+            reloadWithAppMode("main");
+        },
+        ...(mainSimulationWorldObjects == null ? {} : { worldObjects: mainSimulationWorldObjects }),
+    });
+};
+
+const bootMainSimulation = async (): Promise<void> => {
+    applyMainSimulationReloadState(readMainSimulationReloadState());
+    installMainInputHandlers();
+    installAppConsoleCommands(worldObjects, requestMainRender);
+
+    const renderPipeline = readRenderPipeline();
+
+    if (renderPipeline === "cpu") {
+        initCpuRenderer(canvas);
+        return;
+    }
+
     const webGpuStarted = await initWebGpuRenderer(canvas);
 
     if (!webGpuStarted) {
@@ -593,4 +869,30 @@ const initRenderer = async (): Promise<void> => {
     }
 };
 
-void initRenderer();
+const bootDemo = async (appMode: AppMode): Promise<void> => {
+    if (appMode === "sim2d") {
+        await import("./demo/sim2d");
+        installAppConsoleCommands();
+        console.log('2D geodesic demo active. Run `runBlackholeSimulation()` to return.');
+        return;
+    }
+
+    if (appMode === "rayRender3d") {
+        await import("./demo/rayRender3d");
+        installAppConsoleCommands();
+        console.log('3D raytracing demo active. Run `runBlackholeSimulation()` to return.');
+    }
+};
+
+const bootApp = async (): Promise<void> => {
+    const appMode = readAppMode();
+
+    if (appMode !== "main") {
+        await bootDemo(appMode);
+        return;
+    }
+
+    await bootMainSimulation();
+};
+
+void bootApp();

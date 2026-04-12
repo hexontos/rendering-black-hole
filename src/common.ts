@@ -1,28 +1,11 @@
-import type { BlackHole, Camera, GeodesicRay, RGB, Ray, Vector3 } from "./types";
+import type { Camera, RGB, Vector3 } from "./types";
 
 export const rgb = (r: number, g: number, b: number) => ({ r, g, b } satisfies RGB);
 
 export const vec3 = (x: number, y: number, z: number) => ({ x, y, z } satisfies Vector3);
 
-export const sphericalBasis = (theta: number, phi: number): { eR: Vector3; eTheta: Vector3; ePhi: Vector3 } => {
-    const sinTheta = Math.sin(theta);
-    const cosTheta = Math.cos(theta);
-    const sinPhi = Math.sin(phi);
-    const cosPhi = Math.cos(phi);
-
-    return {
-        eR: vec3(sinTheta * cosPhi, cosTheta, sinTheta * sinPhi),
-        eTheta: vec3(cosTheta * cosPhi, -sinTheta, cosTheta * sinPhi),
-        ePhi: vec3(-sinPhi, 0, cosPhi),
-    };
-};
-
 export const cross = (a: Vector3, b: Vector3): Vector3 => {
     return vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
-};
-
-export const mulParts = (a: Vector3, b: Vector3): Vector3 => {
-    return vec3(a.x * b.x, a.y * b.y, a.z * b.z);
 };
 
 export const dot = (a: Vector3, b: Vector3): number => {
@@ -74,48 +57,4 @@ export const cameraUp = (forward: Vector3, right: Vector3): Vector3 => {
 export const cameraRight = (forward: Vector3): Vector3 => {
     const worldUp = vec3(0, 1, 0);
     return normalize(cross(worldUp, forward));
-};
-
-export const reflect = (direction: Vector3, normal: Vector3): Vector3 => {
-    return sub(direction, mul(normal, dot(direction, normal) * 2));
-};
-
-export const ray = (pos: Vector3, dir: Vector3): Ray => {
-    const r = mag(pos);
-    if (r === 0) throw new Error("Cannot initialize a ray at the origin....");
-    const theta = Math.acos(Math.max(-1, Math.min(1, pos.y / r)));
-    const phi = Math.atan2(pos.z, pos.x);
-    const sinTheta = Math.max(Math.sin(theta), 1e-9);
-    const { eR, eTheta, ePhi } = sphericalBasis(theta, phi);
-    const dr = dot(dir, eR);
-    const dtheta = dot(dir, eTheta) / r;
-    const dphi = dot(dir, ePhi) / (r * sinTheta);
-
-    return {
-        pos,
-        dir,
-        r,
-        theta,
-        phi,
-        dr,
-        dtheta,
-        dphi,
-    };
-};
-
-export const gRay = (ray: Ray, blackHole: BlackHole): GeodesicRay => {
-    const sinTheta = Math.max(Math.sin(ray.theta), 1e-9);
-    const L = ray.r ** 2 * Math.sqrt(ray.dtheta ** 2 + sinTheta ** 2 * ray.dphi ** 2);
-    const f = 1.0 - blackHole.schwarzschildRadius / ray.r;
-    const dtDλ = Math.sqrt(
-        (ray.dr ** 2) / (f ** 2)
-        + ((ray.r ** 2) * (ray.dtheta ** 2 + sinTheta ** 2 * ray.dphi ** 2)) / f,
-    );
-    const E = f * dtDλ;
-
-    return {
-        ...ray,
-        E,
-        L,
-    };
 };

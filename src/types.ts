@@ -17,8 +17,6 @@ export type Sphere = {
     pos: Vector3;
     radius: number;
     emission: RGB;
-    reflectivity: RGB;
-    roughness: number;
 };
 
 export type BlackHole = Sphere & {
@@ -32,8 +30,6 @@ export type Disc = {
     innerRadius: number;
     outerRadius: number;
     visible: boolean;
-    noiseVisible: boolean;
-    noiseDensity: number;
     nearColor: RGB;
     farColor: RGB;
     radialBoost: RGB;
@@ -43,9 +39,11 @@ export type RenderGeodesic = {
     dλ: number;
     maxSteps: number;
     escapeRadiusMultiplier: number;
+    useRungeKutta: boolean;
 };
 
 export type Grid = {
+    visible: boolean;
     pos: Vector3;
     halfSize: number;
     cellSize: number;
@@ -95,28 +93,6 @@ export type renderObjects = {
     spheres: Sphere[];
 };
 
-export type Ray = {
-    // cartesian state.
-    pos: Vector3;
-    dir: Vector3;
-    // spherical state
-    r: number;
-    theta: number;
-    phi: number;
-    // seed velocities
-    dr: number;
-    dtheta: number;
-    dphi: number;
-};
-
-export type GeodesicRay = Ray & {
-    // Conserved quantities (in Schwarzschild spacetime)
-    E: number;
-    L: number;
-};
-
-export type SixStates = [number, number, number, number, number, number];
-
 export type Camera = {
     target: BlackHole;
     radius: number;
@@ -130,7 +106,6 @@ export type INTERSECTION =
         collided: true;
         point: Vector3;
         dist: number;
-        normal: Vector3;
         object: RenderOBJ;
     }
     | {
