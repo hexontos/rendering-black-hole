@@ -9,6 +9,8 @@ const entryPoint = path.join(here, 'src', 'main.ts');
 const outfile = path.join(here, 'dist', 'bundle.js');
 const htmlSource = path.join(here, 'index.html');
 const htmlOutfile = path.join(here, 'dist', 'index.html');
+const assetsSource = path.join(here, 'assets');
+const assetsOutdir = path.join(here, 'dist', 'assets');
 
 const copyHtmlEntryPoint = async () => {
     const html = await fs.readFile(htmlSource, 'utf8');
@@ -18,7 +20,20 @@ const copyHtmlEntryPoint = async () => {
     await fs.writeFile(htmlOutfile, pagesHtml);
 };
 
+const copyAssets = async () => {
+    try {
+        await fs.access(assetsSource);
+    } catch {
+        return;
+    }
+
+    await fs.rm(assetsOutdir, { recursive: true, force: true });
+    await fs.cp(assetsSource, assetsOutdir, { recursive: true });
+};
+
 const buildSite = async () => {
+    await fs.rm(path.join(here, 'dist'), { recursive: true, force: true });
+
     await esbuild.build({
         entryPoints: [entryPoint],
         bundle: true,
@@ -33,6 +48,7 @@ const buildSite = async () => {
     });
 
     await copyHtmlEntryPoint();
+    await copyAssets();
 };
 
 // Check if watch mode is requested
@@ -55,6 +71,7 @@ if (isWatch) {
     
     await ctx.watch();
     await copyHtmlEntryPoint();
+    await copyAssets();
     console.log('👀 Watching for changes...');
 } else {
     // Build mode
