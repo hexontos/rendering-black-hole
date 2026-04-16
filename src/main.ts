@@ -1,7 +1,7 @@
 import gpuPipelineShaderSource from "./gpuPipeline.wgsl";
 import { cameraForward, cameraRight, cameraUp, orbitCamera, rgb, vec3 } from "./common";
 import { cpuPipeline } from "./cpuPipeline";
-import { gpuGridVertices } from "./gpuGrid";
+// import { gpuGridVertices } from "./gpuGrid";
 import { createHintPanel } from "./hintPanel";
 import {
     handleCameraKeyArrows,
@@ -273,6 +273,7 @@ let hiddenSpheres: renderObjects["spheres"] | null = null;
 const gpuSceneData = new Float32Array(23 * 4);
 const GPU_SPHERE_FLOATS = 8;
 
+// TO DO: compute average
 const fpsOverlay = document.createElement("div");
 fpsOverlay.style.position = "fixed";
 fpsOverlay.style.top = "8px";
@@ -521,11 +522,12 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             size: Math.max(worldObjects.spheres.length * GPU_SPHERE_FLOATS * Float32Array.BYTES_PER_ELEMENT, 4 * Float32Array.BYTES_PER_ELEMENT),
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
+        /*
         let gridVertexBuffer = device.createBuffer({
             size: 8,
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
-
+        */
         const sceneBindGroupLayout = device.createBindGroupLayout({
             entries: [
                 {
@@ -549,6 +551,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             bindGroupLayouts: [sceneBindGroupLayout],
         });
 
+        /*
         const backgroundPipeline = device.createRenderPipeline({
             layout: scenePipelineLayout,
             vertex: {
@@ -564,6 +567,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 topology: "triangle-list",
             },
         });
+        */
 
         const pipeline = device.createRenderPipeline({
             layout: scenePipelineLayout,
@@ -581,6 +585,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             },
         });
 
+        /*
         const gridPipeline = device.createRenderPipeline({
             layout: scenePipelineLayout,
             vertex: {
@@ -608,6 +613,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 topology: "line-list",
             },
         });
+        */
 
         let bindGroup = device.createBindGroup({
             layout: sceneBindGroupLayout,
@@ -637,7 +643,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             const right = cameraRight(forward);
             const up = cameraUp(forward, right);
             const sphereData = new Float32Array(Math.max(renderWorldObjects.spheres.length * GPU_SPHERE_FLOATS, 4));
-            const gridVertices = gpuGridVertices(camera, renderWorldObjects, SCREEN_WIDTH, SCREEN_HEIGHT);
+            // const gridVertices = gpuGridVertices(camera, renderWorldObjects, SCREEN_WIDTH, SCREEN_HEIGHT);
 
             for (let sphereIndex = 0; sphereIndex < renderWorldObjects.spheres.length; sphereIndex++) {
                 const sphere = renderWorldObjects.spheres[sphereIndex];
@@ -676,12 +682,14 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 });
             }
 
+            /*
             if (gridVertexBuffer.size !== gridVertices.byteLength && gridVertices.byteLength > 0) {
                 gridVertexBuffer = device.createBuffer({
                     size: gridVertices.byteLength,
                     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
                 });
             }
+            */
 
             gpuSceneData.set([cameraPos.x, cameraPos.y, cameraPos.z, 0], 0);
             gpuSceneData.set([forward.x, forward.y, forward.z, 0], 4);
@@ -784,10 +792,13 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
 
             device.queue.writeBuffer(uniformBuffer, 0, gpuSceneData);
             device.queue.writeBuffer(sphereBuffer, 0, sphereData);
+            
+            /*
             if (gridVertices.byteLength > 0) {
                 device.queue.writeBuffer(gridVertexBuffer, 0, gridVertices);
             }
-
+            */
+           
             const encoder = device.createCommandEncoder();
             const view = context.getCurrentTexture().createView();
 
@@ -802,6 +813,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 ],
             });
 
+            /*
             pass.setPipeline(backgroundPipeline);
             pass.setBindGroup(0, bindGroup);
             pass.draw(3);
@@ -811,6 +823,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 pass.setVertexBuffer(0, gridVertexBuffer);
                 pass.draw(gridVertices.length / 2);
             }
+            */
             pass.setPipeline(pipeline);
             pass.setBindGroup(0, bindGroup);
             pass.draw(3);

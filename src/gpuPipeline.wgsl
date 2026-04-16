@@ -34,9 +34,18 @@ struct VSOut {
     @location(0) uv : vec2f,
 };
 
+/* 
 struct GridVSOut {
     @builtin(position) position : vec4f,
 };
+
+@vertex
+fn gridVsMain(@location(0) position: vec2f) -> GridVSOut {
+    var out: GridVSOut;
+    out.position = vec4f(position, 0.0, 1.0);
+    return out;
+}
+*/
 
 struct OrbitalPlane {
     radialAxis: vec3f,
@@ -83,13 +92,6 @@ fn vsMain(@builtin(vertex_index) vertexIndex : u32) -> VSOut {
     return out;
 }
 
-@vertex
-fn gridVsMain(@location(0) position: vec2f) -> GridVSOut {
-    var out: GridVSOut;
-    out.position = vec4f(position, 0.0, 1.0);
-    return out;
-}
-
 fn emptyIntersection() -> Intersection {
     return Intersection(false, 1e30, vec3f(0.0), vec3f(0.0));
 }
@@ -133,10 +135,7 @@ fn hash22(p: vec2f) -> vec2f {
 }
 
 fn sampleStarField(direction: vec3f) -> vec3f {
-    let skyUv = vec2f(
-        atan2(direction.z, direction.x) / (2.0 * PI) + 0.5,
-        acos(clamp(direction.y, -1.0, 1.0)) / PI,
-    );
+    let skyUv = backgroundUvFromDirection(direction);
 
     var color = scene.backgroundStarsColor.xyz;
     let milkyWayNormal = normalize(scene.backgroundMilkyWayParams.xyz);
@@ -222,6 +221,13 @@ fn sampleStarField(direction: vec3f) -> vec3f {
     }
 
     return clamp(color, vec3f(0.0), vec3f(1.0));
+}
+
+fn backgroundUvFromDirection(direction: vec3f) -> vec2f {
+    return vec2f(
+        atan2(direction.z, direction.x) / (2.0 * PI) + 0.5,
+        acos(clamp(direction.y, -1.0, 1.0)) / PI,
+    );
 }
 
 fn sampleBackground(uv: vec2f, direction: vec3f) -> vec3f {
@@ -347,6 +353,18 @@ fn worldPointPlanar(ray: PlanarGeodesicRay, orbitalPlane: OrbitalPlane, blackhol
     let radialComponent = orbitalPlane.radialAxis * (ray.r * cos(ray.phi));
     let tangentialComponent = orbitalPlane.tangentialAxis * (ray.r * sin(ray.phi));
     return blackholePos + radialComponent + tangentialComponent;
+}
+
+fn worldDirectionPlanar(ray: PlanarGeodesicRay, orbitalPlane: OrbitalPlane) -> vec3f {
+    let cosPhi = cos(ray.phi);
+    let sinPhi = sin(ray.phi);
+    let radialVelocity = ray.dr * cosPhi - ray.r * ray.dphi * sinPhi;
+    let tangentialVelocity = ray.dr * sinPhi + ray.r * ray.dphi * cosPhi;
+
+    return normalize(
+        orbitalPlane.radialAxis * radialVelocity +
+        orbitalPlane.tangentialAxis * tangentialVelocity
+    );
 }
 
 fn segmentSphereIntersection(
@@ -577,19 +595,21 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
         }
 
         if (geodesicRay.r >= escapeRadius && stepIndex > 8u) {
-            return TraceResult(false, vec3f(0.0));
+            let escapedDirection = worldDirectionPlanar(geodesicRay, orbitalPlane);
+            return TraceResult(
+                true,
+                sampleBackground(backgroundUvFromDirection(escapedDirection), escapedDirection),
+            );
         }
 
         previousWorldPoint = currentWorldPoint;
     }
 
-    return TraceResult(false, vec3f(0.0));
-}
-
-@fragment
-fn backgroundFsMain(in: VSOut) -> @location(0) vec4f {
-    let screenUv = vec2f(in.uv.x, 1.0 - in.uv.y);
-    return vec4f(sampleBackground(screenUv, cameraRayDirection(in.uv)), 1.0);
+    let escapedDirection = worldDirectionPlanar(geodesicRay, orbitalPlane);
+    return TraceResult(
+        true,
+        sampleBackground(backgroundUvFromDirection(escapedDirection), escapedDirection),
+    );
 }
 
 fn cameraRayDirection(uv: vec2f) -> vec3f {
@@ -610,6 +630,7 @@ fn cameraRayDirection(uv: vec2f) -> vec3f {
 @fragment
 fn fsMain(in: VSOut) -> @location(0) vec4f {
     let rayDirection = cameraRayDirection(in.uv);
+    let screenUv = vec2f(in.uv.x, 1.0 - in.uv.y);
 
     let useGeodesic = scene.geodesicParams.w > 0.5;
     var result = TraceResult(false, vec3f(0.0));
@@ -621,12 +642,14 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
     }
 
     if (!result.hit) {
-        discard;
+        return vec4f(sampleBackground(screenUv, rayDirection), 1.0);
     }
     return vec4f(result.color, 1.0);
 }
 
+/*
 @fragment
 fn gridFsMain() -> @location(0) vec4f {
     return vec4f(scene.gridLineColor.xyz, 1.0);
 }
+*/

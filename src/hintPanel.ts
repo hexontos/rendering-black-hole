@@ -1,5 +1,5 @@
 const HINT_PANEL_STYLE_ID = "blackhole-hint-panel-style";
-
+// TO DO: add 3d arrow pointing to ... when the app is runned
 const ensureHintPanelStyles = (): void => {
     if (document.getElementById(HINT_PANEL_STYLE_ID) != null) return;
 
