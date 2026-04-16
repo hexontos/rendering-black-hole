@@ -11,6 +11,8 @@ struct SceneUniforms {
     discFarColor: vec4f,
     discRadialBoost: vec4f,
     gridLineColor: vec4f,
+    gridPos: vec4f,
+    gridParams: vec4f,
     backgroundParams: vec4f,
     backgroundStarsColor: vec4f,
     backgroundEmptyColor: vec4f,
@@ -34,7 +36,7 @@ struct VSOut {
     @location(0) uv : vec2f,
 };
 
-/* 
+/*
 struct GridVSOut {
     @builtin(position) position : vec4f,
 };
@@ -242,6 +244,160 @@ fn sampleBackground(uv: vec2f, direction: vec3f) -> vec3f {
     }
 
     return sampleStarField(direction);
+}
+
+fn gridVertexY(localX: f32, localZ: f32, baseY: f32, maxDrop: f32, halfSize: f32) -> f32 {
+    let radialDist = length(vec2f(localX, localZ));
+    let edgeT = max(0.0, 1.0 - radialDist / halfSize);
+    let strength = (exp(4.0 * edgeT) - 1.0) / (exp(4.0) - 1.0);
+    return baseY - maxDrop * strength;
+}
+
+fn gridSurfaceDelta(point: vec3f) -> f32 {
+    let local = point - scene.gridPos.xyz;
+    let halfSize = scene.gridParams.x;
+    let maxDrop = scene.gridParams.z;
+    let surfaceY = gridVertexY(local.x, local.z, scene.gridPos.y, maxDrop, halfSize);
+    return point.y - surfaceY;
+}
+
+fn rayBoxIntersection(rayOrigin: vec3f, rayDirection: vec3f, boxMin: vec3f, boxMax: vec3f) -> vec2f {
+    var tMin = 0.0;
+    var tMax = 1e30;
+
+    if (abs(rayDirection.x) < 1e-6) {
+        if (rayOrigin.x < boxMin.x || rayOrigin.x > boxMax.x) {
+            return vec2f(1.0, -1.0);
+        }
+    } else {
+        let invDx = 1.0 / rayDirection.x;
+        let tx0 = (boxMin.x - rayOrigin.x) * invDx;
+        let tx1 = (boxMax.x - rayOrigin.x) * invDx;
+        tMin = max(tMin, min(tx0, tx1));
+        tMax = min(tMax, max(tx0, tx1));
+    }
+
+    if (abs(rayDirection.y) < 1e-6) {
+        if (rayOrigin.y < boxMin.y || rayOrigin.y > boxMax.y) {
+            return vec2f(1.0, -1.0);
+        }
+    } else {
+        let invDy = 1.0 / rayDirection.y;
+        let ty0 = (boxMin.y - rayOrigin.y) * invDy;
+        let ty1 = (boxMax.y - rayOrigin.y) * invDy;
+        tMin = max(tMin, min(ty0, ty1));
+        tMax = min(tMax, max(ty0, ty1));
+    }
+
+    if (abs(rayDirection.z) < 1e-6) {
+        if (rayOrigin.z < boxMin.z || rayOrigin.z > boxMax.z) {
+            return vec2f(1.0, -1.0);
+        }
+    } else {
+        let invDz = 1.0 / rayDirection.z;
+        let tz0 = (boxMin.z - rayOrigin.z) * invDz;
+        let tz1 = (boxMax.z - rayOrigin.z) * invDz;
+        tMin = max(tMin, min(tz0, tz1));
+        tMax = min(tMax, max(tz0, tz1));
+    }
+
+    if (tMax < tMin) {
+        return vec2f(1.0, -1.0);
+    }
+
+    return vec2f(tMin, tMax);
+}
+
+fn gridIntersectionAtPoint(point: vec3f, dist: f32) -> Intersection {
+    let local = point - scene.gridPos.xyz;
+    let halfSize = scene.gridParams.x;
+    let cellSize = scene.gridParams.y;
+    let radialDist = length(vec2f(local.x, local.z));
+
+    if (abs(local.x) > halfSize || abs(local.z) > halfSize) {
+        return emptyIntersection();
+    }
+
+    let gx = local.x - floor(local.x / cellSize) * cellSize;
+    let gz = local.z - floor(local.z / cellSize) * cellSize;
+    let lineWidth = cellSize * 0.1;
+    let radialLimit = max(0.0, halfSize - lineWidth);
+
+    if (radialDist > radialLimit) {
+        return emptyIntersection();
+    }
+
+    let onLine =
+        gx < lineWidth ||
+        gx > cellSize - lineWidth ||
+        gz < lineWidth ||
+        gz > cellSize - lineWidth;
+
+    if (!onLine) {
+        return emptyIntersection();
+    }
+
+    return Intersection(true, dist, point, scene.gridLineColor.xyz);
+}
+
+fn traceGrid(rayOrigin: vec3f, rayDirection: vec3f) -> Intersection {
+    if (scene.gridParams.w < 0.5) {
+        return emptyIntersection();
+    }
+
+    let halfSize = scene.gridParams.x;
+    let maxDrop = scene.gridParams.z;
+    let topY = scene.gridPos.y;
+    let bottomY = topY - maxDrop;
+    let boxMin = vec3f(scene.gridPos.x - halfSize, bottomY, scene.gridPos.z - halfSize);
+    let boxMax = vec3f(scene.gridPos.x + halfSize, topY, scene.gridPos.z + halfSize);
+    let tRange = rayBoxIntersection(rayOrigin, rayDirection, boxMin, boxMax);
+
+    if (tRange.y < tRange.x) {
+        return emptyIntersection();
+    }
+
+    let marchSteps: u32 = 48u;
+    var previousT = tRange.x;
+    var previousPoint = rayOrigin + rayDirection * previousT;
+    var previousDelta = gridSurfaceDelta(previousPoint);
+
+    for (var stepIndex: u32 = 1u; stepIndex <= marchSteps; stepIndex = stepIndex + 1u) {
+        let t = mix(tRange.x, tRange.y, f32(stepIndex) / f32(marchSteps));
+        let point = rayOrigin + rayDirection * t;
+        let delta = gridSurfaceDelta(point);
+        let crossed = (previousDelta > 0.0 && delta <= 0.0) || (previousDelta < 0.0 && delta >= 0.0);
+
+        if (crossed) {
+            var tLow = previousT;
+            var tHigh = t;
+            var deltaLow = previousDelta;
+
+            for (var refineIndex: u32 = 0u; refineIndex < 6u; refineIndex = refineIndex + 1u) {
+                let tMid = 0.5 * (tLow + tHigh);
+                let pointMid = rayOrigin + rayDirection * tMid;
+                let deltaMid = gridSurfaceDelta(pointMid);
+                let sameSide = (deltaLow > 0.0 && deltaMid > 0.0) || (deltaLow < 0.0 && deltaMid < 0.0);
+
+                if (sameSide) {
+                    tLow = tMid;
+                    deltaLow = deltaMid;
+                } else {
+                    tHigh = tMid;
+                }
+            }
+
+            let hitT = 0.5 * (tLow + tHigh);
+            let hitPoint = rayOrigin + rayDirection * hitT;
+            return gridIntersectionAtPoint(hitPoint, hitT);
+        }
+
+        previousT = t;
+        previousPoint = point;
+        previousDelta = delta;
+    }
+
+    return emptyIntersection();
 }
 
 fn buildOrbitalPlane(localOrigin: vec3f, direction: vec3f) -> OrbitalPlane {
@@ -597,7 +753,7 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
         if (geodesicRay.r >= escapeRadius && stepIndex > 8u) {
             let escapedDirection = worldDirectionPlanar(geodesicRay, orbitalPlane);
             return TraceResult(
-                true,
+                false,
                 sampleBackground(backgroundUvFromDirection(escapedDirection), escapedDirection),
             );
         }
@@ -607,7 +763,7 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
 
     let escapedDirection = worldDirectionPlanar(geodesicRay, orbitalPlane);
     return TraceResult(
-        true,
+        false,
         sampleBackground(backgroundUvFromDirection(escapedDirection), escapedDirection),
     );
 }
@@ -641,10 +797,20 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
         result = traceStraight(scene.cameraPos.xyz, rayDirection);
     }
 
-    if (!result.hit) {
-        return vec4f(sampleBackground(screenUv, rayDirection), 1.0);
+    if (result.hit) {
+        return vec4f(result.color, 1.0);
     }
-    return vec4f(result.color, 1.0);
+
+    let gridHit = traceGrid(scene.cameraPos.xyz, rayDirection);
+    if (gridHit.collided) {
+        return vec4f(gridHit.color, 1.0);
+    }
+
+    if (useGeodesic) {
+        return vec4f(result.color, 1.0);
+    }
+
+    return vec4f(sampleBackground(screenUv, rayDirection), 1.0);
 }
 
 /*

@@ -270,7 +270,7 @@ const runtimeSettings = {
 let activeRenderPipeline: RenderPipeline = "gpu";
 let hiddenSpheres: renderObjects["spheres"] | null = null;
 
-const gpuSceneData = new Float32Array(23 * 4);
+const gpuSceneData = new Float32Array(25 * 4);
 const GPU_SPHERE_FLOATS = 8;
 
 // TO DO: compute average
@@ -522,12 +522,10 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             size: Math.max(worldObjects.spheres.length * GPU_SPHERE_FLOATS * Float32Array.BYTES_PER_ELEMENT, 4 * Float32Array.BYTES_PER_ELEMENT),
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
-        /*
-        let gridVertexBuffer = device.createBuffer({
-            size: 8,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-        });
-        */
+        // let gridVertexBuffer = device.createBuffer({
+        //     size: 8,
+        //     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        // });
         const sceneBindGroupLayout = device.createBindGroupLayout({
             entries: [
                 {
@@ -682,14 +680,12 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 });
             }
 
-            /*
-            if (gridVertexBuffer.size !== gridVertices.byteLength && gridVertices.byteLength > 0) {
-                gridVertexBuffer = device.createBuffer({
-                    size: gridVertices.byteLength,
-                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-                });
-            }
-            */
+            // if (gridVertexBuffer.size !== gridVertices.byteLength && gridVertices.byteLength > 0) {
+            //     gridVertexBuffer = device.createBuffer({
+            //         size: gridVertices.byteLength,
+            //         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+            //     });
+            // }
 
             gpuSceneData.set([cameraPos.x, cameraPos.y, cameraPos.z, 0], 0);
             gpuSceneData.set([forward.x, forward.y, forward.z, 0], 4);
@@ -723,82 +719,86 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 0,
             ], 40);
             gpuSceneData.set([renderWorldObjects.grid.lineColor.r / 255, renderWorldObjects.grid.lineColor.g / 255, renderWorldObjects.grid.lineColor.b / 255, 0], 44);
+            gpuSceneData.set([renderWorldObjects.grid.pos.x, renderWorldObjects.grid.pos.y, renderWorldObjects.grid.pos.z, 0], 48);
+            gpuSceneData.set([
+                renderWorldObjects.grid.halfSize,
+                renderWorldObjects.grid.cellSize,
+                renderWorldObjects.grid.maxDrop,
+                renderWorldObjects.grid.visible ? 1 : 0,
+            ], 52);
             gpuSceneData.set([
                 gpuBackgroundModeValue(renderWorldObjects.background.mode),
                 renderWorldObjects.background.stars.densityPrimary,
                 renderWorldObjects.background.stars.densitySecondary,
                 0,
-            ], 48);
+            ], 56);
             gpuSceneData.set([
                 renderWorldObjects.background.stars.baseColor.r / 255,
                 renderWorldObjects.background.stars.baseColor.g / 255,
                 renderWorldObjects.background.stars.baseColor.b / 255,
                 0,
-            ], 52);
+            ], 60);
             gpuSceneData.set([
                 renderWorldObjects.background.empty.color.r / 255,
                 renderWorldObjects.background.empty.color.g / 255,
                 renderWorldObjects.background.empty.color.b / 255,
                 0,
-            ], 56);
+            ], 64);
             gpuSceneData.set([
                 renderWorldObjects.background.gradient.topLeft.r / 255,
                 renderWorldObjects.background.gradient.topLeft.g / 255,
                 renderWorldObjects.background.gradient.topLeft.b / 255,
                 0,
-            ], 60);
+            ], 68);
             gpuSceneData.set([
                 renderWorldObjects.background.gradient.topRight.r / 255,
                 renderWorldObjects.background.gradient.topRight.g / 255,
                 renderWorldObjects.background.gradient.topRight.b / 255,
                 0,
-            ], 64);
+            ], 72);
             gpuSceneData.set([
                 renderWorldObjects.background.gradient.bottomLeft.r / 255,
                 renderWorldObjects.background.gradient.bottomLeft.g / 255,
                 renderWorldObjects.background.gradient.bottomLeft.b / 255,
                 0,
-            ], 68);
+            ], 76);
             gpuSceneData.set([
                 renderWorldObjects.background.gradient.bottomRight.r / 255,
                 renderWorldObjects.background.gradient.bottomRight.g / 255,
                 renderWorldObjects.background.gradient.bottomRight.b / 255,
                 0,
-            ], 72);
+            ], 80);
             gpuSceneData.set([
                 renderWorldObjects.background.stars.milkyWayNormal.x,
                 renderWorldObjects.background.stars.milkyWayNormal.y,
                 renderWorldObjects.background.stars.milkyWayNormal.z,
                 renderWorldObjects.background.stars.milkyWayWidth,
-            ], 76);
+            ], 84);
             gpuSceneData.set([
                 renderWorldObjects.background.stars.milkyWayColor.r / 255,
                 renderWorldObjects.background.stars.milkyWayColor.g / 255,
                 renderWorldObjects.background.stars.milkyWayColor.b / 255,
                 renderWorldObjects.background.stars.milkyWayVisible ? renderWorldObjects.background.stars.milkyWayIntensity : 0,
-            ], 80);
+            ], 88);
             gpuSceneData.set([
                 renderWorldObjects.renderGeodesic.dλ,
                 renderWorldObjects.renderGeodesic.maxSteps,
                 renderWorldObjects.renderGeodesic.escapeRadiusMultiplier,
                 runtimeSettings.gpuRunGeodesic ? 1 : 0,
-            ], 84);
+            ], 92);
             gpuSceneData.set([
                 renderWorldObjects.renderGeodesic.useRungeKutta ? 1 : 0,
                 0,
                 0,
                 0,
-            ], 88);
+            ], 96);
 
             device.queue.writeBuffer(uniformBuffer, 0, gpuSceneData);
             device.queue.writeBuffer(sphereBuffer, 0, sphereData);
-            
-            /*
-            if (gridVertices.byteLength > 0) {
-                device.queue.writeBuffer(gridVertexBuffer, 0, gridVertices);
-            }
-            */
-           
+            // if (gridVertices.byteLength > 0) {
+            //     device.queue.writeBuffer(gridVertexBuffer, 0, gridVertices);
+            // }
+
             const encoder = device.createCommandEncoder();
             const view = context.getCurrentTexture().createView();
 
