@@ -39,6 +39,23 @@ type PlanarGeodesicRay = {
 
 type FourStates = [number, number, number, number];
 
+type TraceResult = {
+    hit: boolean;
+    color: Vector3;
+};
+
+type ColorIntersection =
+    | {
+        collided: true;
+        dist: number;
+        point: Vector3;
+        color: Vector3;
+    }
+    | {
+        collided: false;
+        dist: number;
+    };
+
 const intersectPlane = (origin: Vector3, direction: Vector3, planeY: number): PLANE_INTERSECTION => {
     if (Math.abs(direction.y) < 1e-9) {
         return {
@@ -510,6 +527,13 @@ const sampleStarField = (direction: Vector3, worldObjects: renderObjects): Vecto
     );
 };
 
+const backgroundUvFromDirection = (direction: Vector3): { u: number; v: number } => {
+    return {
+        u: Math.atan2(direction.z, direction.x) / (2.0 * Math.PI) + 0.5,
+        v: Math.acos(Math.max(-1, Math.min(1, direction.y))) / Math.PI,
+    };
+};
+
 const sampleBackground = (u: number, v: number, direction: Vector3, worldObjects: renderObjects): Vector3 => {
     if (worldObjects.background.mode === "empty") {
         return vec3(
@@ -524,6 +548,182 @@ const sampleBackground = (u: number, v: number, direction: Vector3, worldObjects
     }
 
     return sampleStarField(direction, worldObjects);
+};
+
+const emptyColorIntersection = (): ColorIntersection => {
+    return {
+        collided: false,
+        dist: Infinity,
+    };
+};
+
+const gridSurfaceDelta = (point: Vector3, worldObjects: renderObjects): number => {
+    const local = sub(point, worldObjects.grid.pos);
+    return point.y - gridVertexY(local.x, local.z, worldObjects.grid.pos.y, worldObjects.grid.maxDrop, worldObjects.grid.halfSize);
+};
+
+const rayBoxIntersection = (
+    rayOrigin: Vector3,
+    rayDirection: Vector3,
+    boxMin: Vector3,
+    boxMax: Vector3,
+): { min: number; max: number } => {
+    let tMin = 0;
+    let tMax = Infinity;
+
+    if (Math.abs(rayDirection.x) < 1e-6) {
+        if (rayOrigin.x < boxMin.x || rayOrigin.x > boxMax.x) {
+            return { min: 1, max: -1 };
+        }
+    } else {
+        const invDx = 1 / rayDirection.x;
+        const tx0 = (boxMin.x - rayOrigin.x) * invDx;
+        const tx1 = (boxMax.x - rayOrigin.x) * invDx;
+        tMin = Math.max(tMin, Math.min(tx0, tx1));
+        tMax = Math.min(tMax, Math.max(tx0, tx1));
+    }
+
+    if (Math.abs(rayDirection.y) < 1e-6) {
+        if (rayOrigin.y < boxMin.y || rayOrigin.y > boxMax.y) {
+            return { min: 1, max: -1 };
+        }
+    } else {
+        const invDy = 1 / rayDirection.y;
+        const ty0 = (boxMin.y - rayOrigin.y) * invDy;
+        const ty1 = (boxMax.y - rayOrigin.y) * invDy;
+        tMin = Math.max(tMin, Math.min(ty0, ty1));
+        tMax = Math.min(tMax, Math.max(ty0, ty1));
+    }
+
+    if (Math.abs(rayDirection.z) < 1e-6) {
+        if (rayOrigin.z < boxMin.z || rayOrigin.z > boxMax.z) {
+            return { min: 1, max: -1 };
+        }
+    } else {
+        const invDz = 1 / rayDirection.z;
+        const tz0 = (boxMin.z - rayOrigin.z) * invDz;
+        const tz1 = (boxMax.z - rayOrigin.z) * invDz;
+        tMin = Math.max(tMin, Math.min(tz0, tz1));
+        tMax = Math.min(tMax, Math.max(tz0, tz1));
+    }
+
+    if (tMax < tMin) {
+        return { min: 1, max: -1 };
+    }
+
+    return { min: tMin, max: tMax };
+};
+
+const gridIntersectionAtPoint = (
+    point: Vector3,
+    dist: number,
+    worldObjects: renderObjects,
+): ColorIntersection => {
+    const local = sub(point, worldObjects.grid.pos);
+    const halfSize = worldObjects.grid.halfSize;
+    const cellSize = worldObjects.grid.cellSize;
+    const radialDist = Math.hypot(local.x, local.z);
+
+    if (Math.abs(local.x) > halfSize || Math.abs(local.z) > halfSize) {
+        return emptyColorIntersection();
+    }
+
+    const gx = local.x - Math.floor(local.x / cellSize) * cellSize;
+    const gz = local.z - Math.floor(local.z / cellSize) * cellSize;
+    const lineWidth = cellSize * 0.1;
+    const radialLimit = Math.max(0, halfSize - lineWidth);
+
+    if (radialDist > radialLimit) {
+        return emptyColorIntersection();
+    }
+
+    const onLine =
+        gx < lineWidth ||
+        gx > cellSize - lineWidth ||
+        gz < lineWidth ||
+        gz > cellSize - lineWidth;
+
+    if (!onLine) {
+        return emptyColorIntersection();
+    }
+
+    return {
+        collided: true,
+        dist,
+        point,
+        color: vec3(
+            worldObjects.grid.lineColor.r,
+            worldObjects.grid.lineColor.g,
+            worldObjects.grid.lineColor.b,
+        ),
+    };
+};
+
+const traceGrid = (
+    rayOrigin: Vector3,
+    rayDirection: Vector3,
+    worldObjects: renderObjects,
+): ColorIntersection => {
+    if (!worldObjects.grid.visible) {
+        return emptyColorIntersection();
+    }
+
+    const halfSize = worldObjects.grid.halfSize;
+    const topY = worldObjects.grid.pos.y;
+    const bottomY = topY - worldObjects.grid.maxDrop;
+    const boxMin = vec3(worldObjects.grid.pos.x - halfSize, bottomY, worldObjects.grid.pos.z - halfSize);
+    const boxMax = vec3(worldObjects.grid.pos.x + halfSize, topY, worldObjects.grid.pos.z + halfSize);
+    const tRange = rayBoxIntersection(rayOrigin, rayDirection, boxMin, boxMax);
+
+    if (tRange.max < tRange.min) {
+        return emptyColorIntersection();
+    }
+
+    const marchSteps = 48;
+    let previousT = tRange.min;
+    let previousPoint = add(rayOrigin, mul(rayDirection, previousT));
+    let previousDelta = gridSurfaceDelta(previousPoint, worldObjects);
+
+    for (let stepIndex = 1; stepIndex <= marchSteps; stepIndex++) {
+        const t = lerp(tRange.min, tRange.max, stepIndex / marchSteps);
+        const point = add(rayOrigin, mul(rayDirection, t));
+        const delta = gridSurfaceDelta(point, worldObjects);
+        const crossed =
+            (previousDelta > 0 && delta <= 0) ||
+            (previousDelta < 0 && delta >= 0);
+
+        if (crossed) {
+            let tLow = previousT;
+            let tHigh = t;
+            let deltaLow = previousDelta;
+
+            for (let refineIndex = 0; refineIndex < 6; refineIndex++) {
+                const tMid = 0.5 * (tLow + tHigh);
+                const pointMid = add(rayOrigin, mul(rayDirection, tMid));
+                const deltaMid = gridSurfaceDelta(pointMid, worldObjects);
+                const sameSide =
+                    (deltaLow > 0 && deltaMid > 0) ||
+                    (deltaLow < 0 && deltaMid < 0);
+
+                if (sameSide) {
+                    tLow = tMid;
+                    deltaLow = deltaMid;
+                } else {
+                    tHigh = tMid;
+                }
+            }
+
+            const hitT = 0.5 * (tLow + tHigh);
+            const hitPoint = add(rayOrigin, mul(rayDirection, hitT));
+            return gridIntersectionAtPoint(hitPoint, hitT, worldObjects);
+        }
+
+        previousT = t;
+        previousPoint = point;
+        previousDelta = delta;
+    }
+
+    return emptyColorIntersection();
 };
 
 const cpuRenderBackground = (
@@ -665,6 +865,20 @@ const worldPointPlanar = (ray: PlanarGeodesicRay, orbitalPlane: OrbitalPlane, bl
     );
 };
 
+const worldDirectionPlanar = (ray: PlanarGeodesicRay, orbitalPlane: OrbitalPlane): Vector3 => {
+    const cosPhi = Math.cos(ray.phi);
+    const sinPhi = Math.sin(ray.phi);
+    const radialVelocity = ray.dr * cosPhi - ray.r * ray.dphi * sinPhi;
+    const tangentialVelocity = ray.dr * sinPhi + ray.r * ray.dphi * cosPhi;
+
+    return normalize(
+        add(
+            mul(orbitalPlane.radialAxis, radialVelocity),
+            mul(orbitalPlane.tangentialAxis, tangentialVelocity),
+        ),
+    );
+};
+
 const segmentSphereIntersection = (
     segmentStart: Vector3,
     segmentEnd: Vector3,
@@ -784,11 +998,31 @@ const segmentDiscIntersection = (
     };
 };
 
+const traceStraight = (
+    rayOrigin: Vector3,
+    rayDirection: Vector3,
+    worldObjects: renderObjects,
+): TraceResult => {
+    const color = trace(rayOrigin, rayDirection, worldObjects);
+
+    if (color == null) {
+        return {
+            hit: false,
+            color: vec3(0, 0, 0),
+        };
+    }
+
+    return {
+        hit: true,
+        color,
+    };
+};
+
 const traceGeodesic = (
     rayOrigin: Vector3,
     rayDirection: Vector3,
     worldObjects: renderObjects,
-): Vector3 | null => {
+): TraceResult => {
     const blackhole = worldObjects.blackhole;
     const captureRadius = blackhole.schwarzschildRadius * 1.035;
     const localOrigin = sub(rayOrigin, blackhole.pos);
@@ -801,6 +1035,13 @@ const traceGeodesic = (
     let previousWorldPoint = rayOrigin;
 
     for (let stepIndex = 0; stepIndex < maxGeodesicSteps; stepIndex++) {
+        if (geodesicRay.r <= captureRadius) {
+            return {
+                hit: true,
+                color: vec3(0, 0, 0),
+            };
+        }
+
         if (worldObjects.renderGeodesic.useRungeKutta) {
             geodesicRay = fourthOrderRungeKuttaPlanar(geodesicRay, dλ, blackhole.schwarzschildRadius, captureRadius);
         } else {
@@ -808,7 +1049,10 @@ const traceGeodesic = (
         }
 
         if (geodesicRay.r <= captureRadius) {
-            return vec3(0, 0, 0);
+            return {
+                hit: true,
+                color: vec3(0, 0, 0),
+            };
         }
 
         const currentWorldPoint = worldPointPlanar(geodesicRay, orbitalPlane, blackhole.pos);
@@ -824,31 +1068,42 @@ const traceGeodesic = (
         const discHit = segmentDiscIntersection(previousWorldPoint, currentWorldPoint, worldObjects.disc, worldObjects.blackhole);
 
         if (discHit.collided && (!objectHit.collided || discHit.dist < objectHit.dist)) {
-            return sampleDisc(discHit.point, worldObjects.disc);
+            return {
+                hit: true,
+                color: sampleDisc(discHit.point, worldObjects.disc),
+            };
         }
 
         if (objectHit.collided) {
-            if (objectHit.object === worldObjects.blackhole) {
-                return vec3(0, 0, 0);
-            }
-
-            return vec3(objectHit.object.emission.r, objectHit.object.emission.g, objectHit.object.emission.b);
+            return {
+                hit: true,
+                color: vec3(objectHit.object.emission.r, objectHit.object.emission.g, objectHit.object.emission.b),
+            };
         }
 
         if (geodesicRay.r >= escapeRadius && stepIndex > 8) {
-            return null;
+            const escapedDirection = worldDirectionPlanar(geodesicRay, orbitalPlane);
+            const escapedUv = backgroundUvFromDirection(escapedDirection);
+            return {
+                hit: false,
+                color: sampleBackground(escapedUv.u, escapedUv.v, escapedDirection, worldObjects),
+            };
         }
 
         previousWorldPoint = currentWorldPoint;
     }
 
-    return null;
+    const escapedDirection = worldDirectionPlanar(geodesicRay, orbitalPlane);
+    const escapedUv = backgroundUvFromDirection(escapedDirection);
+    return {
+        hit: false,
+        color: sampleBackground(escapedUv.u, escapedUv.v, escapedDirection, worldObjects),
+    };
 };
 
 const toByte = (value: number): number => Math.max(0, Math.min(255, Math.round(value)));
 
 const cpuRenderRayTracing = (
-    _ctx: CanvasRenderingContext2D,
     image: ImageData,
     camera: Camera,
     worldObjects: renderObjects,
@@ -866,15 +1121,23 @@ const cpuRenderRayTracing = (
 
     // each pixel in canvas
     for (let j: number = 0; j < SCREEN_HEIGHT; j++) {
+        const screenV = j / Math.max(SCREEN_HEIGHT - 1, 1);
         for (let i: number = 0; i < SCREEN_WIDTH; i++) {
+            const screenU = i / Math.max(SCREEN_WIDTH - 1, 1);
             const rayDirection = cameraRayDirection(i, j, SCREEN_WIDTH, SCREEN_HEIGHT, camera.focalLength, forward, right, up);
             const rayOrigin = cameraPos;
-
-            const pixel = runGeodesic
+            const result = runGeodesic
                 ? traceGeodesic(rayOrigin, rayDirection, worldObjects)
-                : trace(rayOrigin, rayDirection, worldObjects);
+                : traceStraight(rayOrigin, rayDirection, worldObjects);
+            const gridHit = result.hit ? emptyColorIntersection() : traceGrid(rayOrigin, rayDirection, worldObjects);
 
-            if (pixel == null) continue;
+            const pixel = result.hit
+                ? result.color
+                : gridHit.collided
+                    ? gridHit.color
+                    : runGeodesic
+                        ? result.color
+                        : sampleBackground(screenU, screenV, rayDirection, worldObjects);
 
             const index = cpuPixelIndex(i, j, SCREEN_WIDTH);
             pixels[index + 0] = toByte(pixel.x);
@@ -893,8 +1156,6 @@ export function cpuPipeline(
     wc: WorldConfig,
     runGeodesic: boolean,
 ): void {
-    cpuRenderBackground(image, camera, worldObjects, wc);
-    cpuRenderGravityGrid(image, camera, worldObjects, wc);
-    cpuRenderRayTracing(ctx, image, camera, worldObjects, wc, runGeodesic);
+    cpuRenderRayTracing(image, camera, worldObjects, wc, runGeodesic);
     ctx.putImageData(image, 0, 0);
 }
