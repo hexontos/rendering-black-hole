@@ -5,6 +5,7 @@ import { cpuPipeline } from "./cpuPipeline";
 import { createHintPanel } from "./hintPanel";
 import {
     handleCameraKeyArrows,
+    handleCameraZoomKeys,
     handleGeodesicToggleKey,
     handleCameraMouseDrag,
     handleSceneToggleKeys,
@@ -32,6 +33,7 @@ const RENDER_PIPELINE_NAME = "blackhole.renderPipeline";
 const CANVAS_DISPLAY_MODE_NAME = "blackhole.canvasDisplayMode";
 const OVERLAY_VISIBILITY_NAME = "blackhole.overlayVisibility";
 const MAIN_SIMULATION_STATE_NAME = "blackhole.mainSimulationState";
+const HINT_PANEL_SKIP_NEXT_EXPAND_NAME = "blackhole.hintPanelSkipNextExpand";
 
 const readAndClearStorageValue = (storage: Storage, name: string): string | null => {
     const value = storage.getItem(name);
@@ -59,7 +61,12 @@ const readRenderPipeline = (): RenderPipeline => {
     return "gpu";
 };
 
+const skipHintPanelStartupExpandOnNextLoad = (): void => {
+    sessionStorage.setItem(HINT_PANEL_SKIP_NEXT_EXPAND_NAME, "skip");
+};
+
 const reloadWithAppMode = (mode: AppMode): void => {
+    skipHintPanelStartupExpandOnNextLoad();
     localStorage.setItem(APP_MODE_NAME, mode);
     window.location.reload();
 };
@@ -90,7 +97,13 @@ const prepareOverlayReloadVisibility = (visible: boolean): void => {
     sessionStorage.removeItem(OVERLAY_VISIBILITY_NAME);
 };
 
+const shouldExpandHintPanelInitially = (): boolean => {
+    const skipNextExpand = readAndClearStorageValue(sessionStorage, HINT_PANEL_SKIP_NEXT_EXPAND_NAME);
+    return skipNextExpand !== "skip";
+};
+
 const reloadWithRenderPipeline = (renderPipeline: RenderPipeline, overlayVisible: boolean): void => {
+    skipHintPanelStartupExpandOnNextLoad();
     prepareOverlayReloadVisibility(overlayVisible);
     localStorage.setItem(APP_MODE_NAME, "main");
     localStorage.setItem(RENDER_PIPELINE_NAME, renderPipeline);
@@ -112,6 +125,7 @@ const reloadWithCanvasDisplayMode = (
     overlayVisible: boolean,
     renderPipeline: RenderPipeline,
 ): void => {
+    skipHintPanelStartupExpandOnNextLoad();
     prepareOverlayReloadVisibility(overlayVisible);
     if (renderPipeline === "cpu") {
         localStorage.setItem(RENDER_PIPELINE_NAME, "cpu");
@@ -221,7 +235,7 @@ const background = {
         densityPrimary: 0.023,
         densitySecondary: 0.011,
         baseColor: rgb(3, 4, 8),
-        milkyWayVisible: false,
+        milkyWayVisible: true,
         milkyWayNormal: vec3(0.26, 0.9, -0.34),
         milkyWayWidth: 0.17,
         milkyWayIntensity: 0.42,
@@ -256,7 +270,7 @@ const worldObjects: renderObjects = {
             emission: rgb(115, 0, 255),
         },
         {
-            pos: vec3(-30 * SCHWARZSCHILD_RADIUS, -3 * SCHWARZSCHILD_RADIUS, -7*SCHWARZSCHILD_RADIUS),
+            pos: vec3(-60 * SCHWARZSCHILD_RADIUS, -3 * SCHWARZSCHILD_RADIUS, -15*SCHWARZSCHILD_RADIUS),
             radius: 3 * SCHWARZSCHILD_RADIUS,
             emission: rgb(232, 213, 255),
         },
@@ -284,10 +298,12 @@ fpsOverlay.style.fontFamily = "monospace";
 fpsOverlay.style.fontSize = "12px";
 fpsOverlay.style.whiteSpace = "pre";
 fpsOverlay.style.zIndex = "9999";
-fpsOverlay.textContent = "FPS: --\nFrame: -- ms\nRender: --\nComputation: --";
+fpsOverlay.textContent = "FPS: --\nFrame: --\nRender: --\nComputation: --";
 document.body.appendChild(fpsOverlay);
 let overlayVisible = readOverlayVisibility();
-const hintPanel = createHintPanel(fpsOverlay);
+const hintPanel = createHintPanel(fpsOverlay, {
+    expandInitially: shouldExpandHintPanelInitially(),
+});
 
 const FPS_OVERLAY_UPDATE_INTERVAL_MS = 250;
 const FPS_FRAME_TIME_SMOOTHING = 0.2;
@@ -297,16 +313,17 @@ let fpsAverageFrameTimeMs: number | null = null;
 let fpsLastOverlayUpdateTime = 0;
 
 const reportFrame = (frameTime: number, render: string, computation: string): void => {
-    if (fpsLastFrameTime != null) {
-        const frameTimeMs = Math.max(frameTime - fpsLastFrameTime, 1);
-        fpsAverageFrameTimeMs = fpsAverageFrameTimeMs == null
-            ? frameTimeMs
-            : fpsAverageFrameTimeMs + (frameTimeMs - fpsAverageFrameTimeMs) * FPS_FRAME_TIME_SMOOTHING;
+    if (fpsLastFrameTime == null) {
+        fpsLastFrameTime = frameTime;
+        return;
     }
 
+    const frameTimeMs = Math.max(frameTime - fpsLastFrameTime, 1);
     fpsLastFrameTime = frameTime;
+    fpsAverageFrameTimeMs = fpsAverageFrameTimeMs == null
+        ? frameTimeMs
+        : fpsAverageFrameTimeMs + (frameTimeMs - fpsAverageFrameTimeMs) * FPS_FRAME_TIME_SMOOTHING;
 
-    if (fpsAverageFrameTimeMs == null) return;
     if (frameTime - fpsLastOverlayUpdateTime < FPS_OVERLAY_UPDATE_INTERVAL_MS) return;
 
     fpsLastOverlayUpdateTime = frameTime;
@@ -315,7 +332,7 @@ const reportFrame = (frameTime: number, render: string, computation: string): vo
 };
 
 const currentComputationLabel = (runGeodesic: boolean): string => {
-    if (!runGeodesic) return "Straight ray";
+    if (!runGeodesic) return "Straight rays";
     return worldObjects.renderGeodesic.useRungeKutta ? "Geodesic (Runge-Kutta)" : "Geodesic (Fast)";
 };
 
@@ -432,6 +449,7 @@ const toggleOverlayVisibility = (): void => {
 const installMainInputHandlers = (): void => {
     window.addEventListener("keydown", (event) => {
         const cameraChanged = handleCameraKeyArrows(event, camera);
+        const zoomChanged = handleCameraZoomKeys(event, camera, MIN_CAMERA_RADIUS, MAX_CAMERA_RADIUS);
         const computationChanged = handleGeodesicToggleKey(event, worldObjects.renderGeodesic);
         const sceneChanged = handleSceneToggleKeys(event, worldObjects, {
             toggleRenderPipeline,
@@ -441,7 +459,7 @@ const installMainInputHandlers = (): void => {
             toggleOverlayVisibility,
         });
 
-        if (cameraChanged || computationChanged || sceneChanged) {
+        if (cameraChanged || zoomChanged || computationChanged || sceneChanged) {
             requestMainRender();
         }
     });
@@ -481,7 +499,7 @@ const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
 
     console.log("WebGPU unavailable. Defaulted to CPU pipeline renderer.");
     console.log("Run `help()` in the console to see available commands.");
-    console.log("Press `1` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
+    console.log("Press `2` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
 
     const renderFrame = (frameTime: number): void => {
         renderQueued = false;
@@ -849,7 +867,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
 
         console.log("WebGPU renderer active. GPU goes brbrbrbr....");
         console.log("Run `help()` in the console to see available commands.");
-        console.log("Press `1` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
+        console.log("Press `2` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
         requestMainRender();
         return true;
     } catch (error) {

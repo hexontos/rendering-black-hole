@@ -34,12 +34,12 @@ const cycleBackgroundShortcut = (worldObjects: renderObjects): void => {
 
     if (background.mode !== "stars") {
         background.mode = "stars";
-        background.stars.milkyWayVisible = false;
+        background.stars.milkyWayVisible = true;
         return;
     }
 
-    if (!background.stars.milkyWayVisible) {
-        background.stars.milkyWayVisible = true;
+    if (background.stars.milkyWayVisible) {
+        background.stars.milkyWayVisible = false;
         return;
     }
 
@@ -220,7 +220,7 @@ export const handleCameraKeyArrows = (event: KeyboardEvent, camera: Camera, step
 };
 
 export const handleGeodesicToggleKey = (event: KeyboardEvent, geodesicToggleState: GeodesicToggleState): boolean => {
-    if (event.key !== "1") return false;
+    if (event.key !== "2") return false;
 
     geodesicToggleState.useRungeKutta = !geodesicToggleState.useRungeKutta;
     event.preventDefault();
@@ -235,41 +235,36 @@ export const handleSceneToggleKeys = (
     if (event.altKey || event.ctrlKey || event.metaKey) return false;
 
     switch (event.key) {
-        case "2":
-            worldObjects.disc.visible = !worldObjects.disc.visible;
-            event.preventDefault();
-            return true;
-        case "3":
-            worldObjects.grid.visible = !worldObjects.grid.visible;
-            event.preventDefault();
-            return true;
-        case "4":
-            actions.toggleSpheres();
-            event.preventDefault();
-            return true;
-        case "5":
-            cycleBackgroundShortcut(worldObjects);
-            event.preventDefault();
-            return true;
-        case "6":
-            worldObjects.background.mode = "gradient";
-            worldObjects.background.stars.milkyWayVisible = false;
-            event.preventDefault();
-            return true;
-        case "7":
-            actions.toggleGeodesicEnabled();
-            event.preventDefault();
-            return true;
-        case "8":
+        case "1":
             actions.toggleCanvasSize();
             event.preventDefault();
             return true;
+        case "3":
+            actions.toggleGeodesicEnabled();
+            event.preventDefault();
+            return true;
+        case "4":
+            cycleBackgroundShortcut(worldObjects);
+            event.preventDefault();
+            return true;
+        case "5":
+            worldObjects.grid.visible = !worldObjects.grid.visible;
+            event.preventDefault();
+            return true;
+        case "6":
+            worldObjects.disc.visible = !worldObjects.disc.visible;
+            event.preventDefault();
+            return true;
+        case "7":
+            actions.toggleSpheres();
+            event.preventDefault();
+            return true;
         case "9":
-            actions.toggleRenderPipeline();
+            actions.toggleOverlayVisibility();
             event.preventDefault();
             return true;
         case "0":
-            actions.toggleOverlayVisibility();
+            actions.toggleRenderPipeline();
             event.preventDefault();
             return true;
         default:
@@ -316,4 +311,28 @@ export const handleCameraWheelZoom = (
 
     event.preventDefault();
     return true;
+};
+
+export const handleCameraZoomKeys = (
+    event: KeyboardEvent,
+    camera: Camera,
+    minRadius: number,
+    maxRadius: number,
+    zoomStep: number = 1.1,
+): boolean => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return false;
+
+    if (event.key === "+" || event.key === "=") {
+        camera.radius = Math.max(camera.radius / zoomStep, minRadius);
+        event.preventDefault();
+        return true;
+    }
+
+    if (event.key === "-" || event.key === "_") {
+        camera.radius = Math.min(camera.radius * zoomStep, maxRadius);
+        event.preventDefault();
+        return true;
+    }
+
+    return false;
 };

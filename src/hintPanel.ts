@@ -1,5 +1,7 @@
 const HINT_PANEL_STYLE_ID = "blackhole-hint-panel-style";
-// TO DO: add 3d arrow pointing to ... when the app is runned
+
+const INITIAL_EXPANDED_DURATION_MS = 3000;
+
 const ensureHintPanelStyles = (): void => {
     if (document.getElementById(HINT_PANEL_STYLE_ID) != null) return;
 
@@ -76,27 +78,40 @@ const ensureHintPanelStyles = (): void => {
     document.head.appendChild(style);
 };
 
-const panelContent = `1  Geodesic: Fast / Runge-Kutta
-2  Disc: Show / Hide
-3  Grid: Show / Hide
-4  Spheres: Show / Hide
-5  Background: Stars / Milky Way / Empty
-6  Background: Gradient
-7  Geodesic: On / Off
-8  Canvas: Default / Fullscreen
-9  Render: GPU / CPU
-0  Overlay: Show / Hide`;
+const panelContent = `1  Canvas: Default / Fullscreen
+2  Geodesic: Fast / Runge-Kutta
+3  Geodesic: On / Off
+4  BG: Milky Way / Stars / Empty
+5  Grid: Show / Hide
+6  Disc: Show / Hide
+7  Spheres: Show / Hide
+8  Camera Spin (not implemented)
+9  Overlay: Show / Hide
+0  Render: GPU / CPU
+--------------
+Controls:
+Drag mouse / Arrow keys
+Wheel / + / - zoom`;
 
 export type HintPanelController = {
     setOverlayVisible: (visible: boolean) => void;
 };
 
-export const createHintPanel = (anchor: HTMLElement): HintPanelController => {
+type CreateHintPanelOptions = {
+    expandInitially?: boolean;
+};
+
+export const createHintPanel = (anchor: HTMLElement, options: CreateHintPanelOptions = {}): HintPanelController => {
     ensureHintPanelStyles();
 
     const panel = document.createElement("div");
     panel.className = "blackhole-hint-panel";
     let overlayVisible = true;
+    let hovered = false;
+    let startupExpanded = options.expandInitially === true;
+    if (startupExpanded) {
+        panel.classList.add("expanded");
+    }
 
     const label = document.createElement("div");
     label.className = "blackhole-hint-panel__label";
@@ -107,6 +122,11 @@ export const createHintPanel = (anchor: HTMLElement): HintPanelController => {
     content.textContent = panelContent;
 
     panel.append(label, content);
+
+    const syncExpandedState = (): void => {
+        panel.classList.toggle("expanded", hovered || startupExpanded);
+        positionPanel();
+    };
 
     const positionPanel = (): void => {
         if (!overlayVisible) {
@@ -121,18 +141,26 @@ export const createHintPanel = (anchor: HTMLElement): HintPanelController => {
     };
 
     panel.addEventListener("mouseenter", () => {
-        panel.classList.add("expanded");
-        positionPanel();
+        hovered = true;
+        syncExpandedState();
     });
 
     panel.addEventListener("mouseleave", () => {
-        panel.classList.remove("expanded");
+        hovered = false;
+        syncExpandedState();
     });
 
     window.addEventListener("resize", positionPanel);
 
     document.body.appendChild(panel);
-    requestAnimationFrame(positionPanel);
+    requestAnimationFrame(syncExpandedState);
+
+    if (startupExpanded) {
+        window.setTimeout(() => {
+            startupExpanded = false;
+            syncExpandedState();
+        }, INITIAL_EXPANDED_DURATION_MS);
+    }
 
     return {
         setOverlayVisible: (visible: boolean) => {
