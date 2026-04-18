@@ -16,6 +16,7 @@ import type { BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjec
 
 type AppMode = "main" | "sim2d" | "rayRender3d";
 type RenderPipeline = "cpu" | "gpu";
+type CameraSpin = "off" | "right" | "left";
 type MainSimulationReloadState = {
     discVisible: boolean;
     gridVisible: boolean;
@@ -24,6 +25,7 @@ type MainSimulationReloadState = {
     useRungeKutta: boolean;
     cpuRunGeodesic: boolean;
     gpuRunGeodesic: boolean;
+    cameraSpin: CameraSpin;
     spheres: renderObjects["spheres"];
     hiddenSpheres: renderObjects["spheres"] | null;
 };
@@ -176,11 +178,12 @@ const SCHWARZSCHILD_RADIUS = 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2);
 const EVENT_HORIZON_RADIUS = SCHWARZSCHILD_RADIUS;
 const CAMERA_RADIUS = 32 * SCHWARZSCHILD_RADIUS;
 const MIN_CAMERA_RADIUS_DIVISOR = 1.4;
-const MAX_CAMERA_RADIUS_MULTIPLIER = 3.3;
+const MAX_CAMERA_RADIUS_MULTIPLIER = 3.6;
 const BASE_GEODESIC_STEP = 5e7 * 1.9;
 const BASE_GEODESIC_MAX_STEPS = 2 ** 15;
 const BASE_ESCAPE_RADIUS_MULTIPLIER = 35;
 const REFERENCE_CAMERA_RADIUS = CAMERA_RADIUS;
+const CAMERA_SPIN_STEP = 0.008;
 
 const blackHole = {
     pos: WORLD_CENTER,
@@ -282,6 +285,7 @@ const runtimeSettings = {
     gpuRunGeodesic: true,
 };
 let activeRenderPipeline: RenderPipeline = "gpu";
+let cameraSpin: CameraSpin = "off";
 let hiddenSpheres: renderObjects["spheres"] | null = null;
 
 const gpuSceneData = new Float32Array(25 * 4);
@@ -386,6 +390,9 @@ const applyMainSimulationReloadState = (mainSimulationReloadState: MainSimulatio
     worldObjects.spheres = mainSimulationReloadState.spheres;
     runtimeSettings.cpuRunGeodesic = mainSimulationReloadState.cpuRunGeodesic;
     runtimeSettings.gpuRunGeodesic = mainSimulationReloadState.gpuRunGeodesic;
+    cameraSpin = mainSimulationReloadState.cameraSpin === "right" || mainSimulationReloadState.cameraSpin === "left"
+        ? mainSimulationReloadState.cameraSpin
+        : "off";
     hiddenSpheres = mainSimulationReloadState.hiddenSpheres;
 };
 
@@ -398,6 +405,7 @@ const persistMainSimulationReloadState = (): void => {
         useRungeKutta: worldObjects.renderGeodesic.useRungeKutta,
         cpuRunGeodesic: runtimeSettings.cpuRunGeodesic,
         gpuRunGeodesic: runtimeSettings.gpuRunGeodesic,
+        cameraSpin,
         spheres: worldObjects.spheres,
         hiddenSpheres,
     };
@@ -446,6 +454,34 @@ const toggleOverlayVisibility = (): void => {
     applyOverlayVisibility(!overlayVisible);
 };
 
+const toggleCameraSpin = (): void => {
+    if (cameraSpin === "off") {
+        cameraSpin = "right";
+        return;
+    }
+
+    if (cameraSpin === "right") {
+        cameraSpin = "left";
+        return;
+    }
+
+    cameraSpin = "off";
+};
+
+const applyCameraSpinStep = (): boolean => {
+    if (cameraSpin === "right") {
+        camera.yaw -= CAMERA_SPIN_STEP;
+        return true;
+    }
+
+    if (cameraSpin === "left") {
+        camera.yaw += CAMERA_SPIN_STEP;
+        return true;
+    }
+
+    return false;
+};
+
 const installMainInputHandlers = (): void => {
     window.addEventListener("keydown", (event) => {
         const cameraChanged = handleCameraKeyArrows(event, camera);
@@ -456,6 +492,7 @@ const installMainInputHandlers = (): void => {
             toggleCanvasSize: toggleCanvasDisplayMode,
             toggleSpheres: toggleSphereVisibility,
             toggleGeodesicEnabled,
+            toggleCameraSpin,
             toggleOverlayVisibility,
         });
 
@@ -505,6 +542,9 @@ const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
         renderQueued = false;
         cpuPipeline(ctx, image, camera, currentWorldObjects(camera), worldConf, runtimeSettings.cpuRunGeodesic);
         reportFrame(frameTime, "CPU", currentComputationLabel(runtimeSettings.cpuRunGeodesic));
+        if (applyCameraSpinStep()) {
+            requestMainRender();
+        }
     };
 
     requestMainRender = () => {
@@ -857,6 +897,9 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
 
             device.queue.submit([encoder.finish()]);
             reportFrame(frameTime, "GPU", currentComputationLabel(runtimeSettings.gpuRunGeodesic));
+            if (applyCameraSpinStep()) {
+                requestMainRender();
+            }
         };
 
         requestMainRender = () => {

@@ -85,7 +85,7 @@ const panelContent = `1  Canvas: Default / Fullscreen
 5  Grid: Show / Hide
 6  Disc: Show / Hide
 7  Spheres: Show / Hide
-8  Camera Spin (not implemented)
+8  Camera Spin: Off / Right / Left
 9  Overlay: Show / Hide
 0  Render: GPU / CPU
 --------------

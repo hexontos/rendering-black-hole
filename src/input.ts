@@ -26,6 +26,7 @@ type SceneShortcutActions = {
     toggleCanvasSize: () => void;
     toggleSpheres: () => void;
     toggleGeodesicEnabled: () => void;
+    toggleCameraSpin: () => void;
     toggleOverlayVisibility: () => void;
 };
 
@@ -257,6 +258,10 @@ export const handleSceneToggleKeys = (
             return true;
         case "7":
             actions.toggleSpheres();
+            event.preventDefault();
+            return true;
+        case "8":
+            actions.toggleCameraSpin();
             event.preventDefault();
             return true;
         case "9":
