@@ -7,7 +7,7 @@ import type {
     RGB,
     renderObjects,
 } from "./types";
-
+// TO DO: add comands to get values from object in currect positions (like  the camera)
 export type DemoName = "sim2d" | "rayRender3d";
 
 type ConsoleCommandContext = {

@@ -162,7 +162,7 @@ const SCHWARZSCHILD_RADIUS = 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2);
 const EVENT_HORIZON_RADIUS = SCHWARZSCHILD_RADIUS;
 const CAMERA_RADIUS = 32 * SCHWARZSCHILD_RADIUS;
 const MIN_CAMERA_RADIUS_DIVISOR = 1.4;
-const MAX_CAMERA_RADIUS_MULTIPLIER = 1.5;
+const MAX_CAMERA_RADIUS_MULTIPLIER = 3.3;
 const BASE_GEODESIC_STEP = 5e7 * 1.9;
 const BASE_GEODESIC_MAX_STEPS = 2 ** 15;
 const BASE_ESCAPE_RADIUS_MULTIPLIER = 35;
@@ -209,7 +209,7 @@ const grid = {
         blackHole.pos.y - 3.8 * SCHWARZSCHILD_RADIUS,
         blackHole.pos.z,
     ),
-    halfSize: 4.6 * SCHWARZSCHILD_RADIUS,
+    halfSize: 5 * SCHWARZSCHILD_RADIUS,
     cellSize: 0.35 * SCHWARZSCHILD_RADIUS,
     maxDrop: 2.8 * SCHWARZSCHILD_RADIUS,
     lineColor: rgb(255, 255, 255),
@@ -273,7 +273,6 @@ let hiddenSpheres: renderObjects["spheres"] | null = null;
 const gpuSceneData = new Float32Array(25 * 4);
 const GPU_SPHERE_FLOATS = 8;
 
-// TO DO: compute average
 const fpsOverlay = document.createElement("div");
 fpsOverlay.style.position = "fixed";
 fpsOverlay.style.top = "8px";
@@ -285,25 +284,34 @@ fpsOverlay.style.fontFamily = "monospace";
 fpsOverlay.style.fontSize = "12px";
 fpsOverlay.style.whiteSpace = "pre";
 fpsOverlay.style.zIndex = "9999";
-fpsOverlay.textContent = "FPS: --\nRender: --\nComputation: --";
+fpsOverlay.textContent = "FPS: --\nFrame: -- ms\nRender: --\nComputation: --";
 document.body.appendChild(fpsOverlay);
 let overlayVisible = readOverlayVisibility();
 const hintPanel = createHintPanel(fpsOverlay);
 
-let fpsFrames = 0;
-let fpsLastTime = performance.now();
+const FPS_OVERLAY_UPDATE_INTERVAL_MS = 250;
+const FPS_FRAME_TIME_SMOOTHING = 0.2;
 
-const reportFrame = (render: string, computation: string): void => {
-    fpsFrames += 1;
-    const now = performance.now();
-    const elapsed = now - fpsLastTime;
+let fpsLastFrameTime: number | null = null;
+let fpsAverageFrameTimeMs: number | null = null;
+let fpsLastOverlayUpdateTime = 0;
 
-    if (elapsed >= 1000) {
-        const fps = fpsFrames * 1000 / elapsed;
-        fpsOverlay.textContent = `FPS: ${fps.toFixed(1)} (approx.)\nRender: ${render}\nComputation: ${computation}`;
-        fpsFrames = 0;
-        fpsLastTime = now;
+const reportFrame = (frameTime: number, render: string, computation: string): void => {
+    if (fpsLastFrameTime != null) {
+        const frameTimeMs = Math.max(frameTime - fpsLastFrameTime, 1);
+        fpsAverageFrameTimeMs = fpsAverageFrameTimeMs == null
+            ? frameTimeMs
+            : fpsAverageFrameTimeMs + (frameTimeMs - fpsAverageFrameTimeMs) * FPS_FRAME_TIME_SMOOTHING;
     }
+
+    fpsLastFrameTime = frameTime;
+
+    if (fpsAverageFrameTimeMs == null) return;
+    if (frameTime - fpsLastOverlayUpdateTime < FPS_OVERLAY_UPDATE_INTERVAL_MS) return;
+
+    fpsLastOverlayUpdateTime = frameTime;
+    const fps = 1000 / fpsAverageFrameTimeMs;
+    fpsOverlay.textContent = `FPS: ${fps.toFixed(1)}\nFrame: ${fpsAverageFrameTimeMs.toFixed(1)} ms\nRender: ${render}\nComputation: ${computation}`;
 };
 
 const currentComputationLabel = (runGeodesic: boolean): string => {
@@ -475,10 +483,10 @@ const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
     console.log("Run `help()` in the console to see available commands.");
     console.log("Press `1` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
 
-    const renderFrame = (): void => {
+    const renderFrame = (frameTime: number): void => {
         renderQueued = false;
         cpuPipeline(ctx, image, camera, currentWorldObjects(camera), worldConf, runtimeSettings.cpuRunGeodesic);
-        reportFrame("CPU", currentComputationLabel(runtimeSettings.cpuRunGeodesic));
+        reportFrame(frameTime, "CPU", currentComputationLabel(runtimeSettings.cpuRunGeodesic));
     };
 
     requestMainRender = () => {
@@ -633,7 +641,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
 
         let renderQueued = false;
 
-        const frame = (): void => {
+        const frame = (frameTime: number): void => {
             renderQueued = false;
             const renderWorldObjects = currentWorldObjects(camera);
             const cameraPos = orbitCamera(camera);
@@ -830,7 +838,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             pass.end();
 
             device.queue.submit([encoder.finish()]);
-            reportFrame("GPU", currentComputationLabel(runtimeSettings.gpuRunGeodesic));
+            reportFrame(frameTime, "GPU", currentComputationLabel(runtimeSettings.gpuRunGeodesic));
         };
 
         requestMainRender = () => {
