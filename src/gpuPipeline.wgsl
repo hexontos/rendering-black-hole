@@ -36,19 +36,6 @@ struct VSOut {
     @location(0) uv : vec2f,
 };
 
-/*
-struct GridVSOut {
-    @builtin(position) position : vec4f,
-};
-
-@vertex
-fn gridVsMain(@location(0) position: vec2f) -> GridVSOut {
-    var out: GridVSOut;
-    out.position = vec4f(position, 0.0, 1.0);
-    return out;
-}
-*/
-
 struct OrbitalPlane {
     radialAxis: vec3f,
     tangentialAxis: vec3f,
@@ -65,7 +52,6 @@ struct PlanarGeodesicRay {
 struct Intersection {
     collided: bool,
     dist: f32,
-    point: vec3f,
     color: vec3f,
 };
 
@@ -95,7 +81,7 @@ fn vsMain(@builtin(vertex_index) vertexIndex : u32) -> VSOut {
 }
 
 fn emptyIntersection() -> Intersection {
-    return Intersection(false, 1e30, vec3f(0.0), vec3f(0.0));
+    return Intersection(false, 1e30, vec3f(0.0));
 }
 
 fn blackholeShadowRadius(schwarzschildRadius: f32) -> f32 {
@@ -337,7 +323,7 @@ fn gridIntersectionAtPoint(point: vec3f, dist: f32) -> Intersection {
         return emptyIntersection();
     }
 
-    return Intersection(true, dist, point, scene.gridLineColor.xyz);
+    return Intersection(true, dist, scene.gridLineColor.xyz);
 }
 
 fn traceGrid(rayOrigin: vec3f, rayDirection: vec3f) -> Intersection {
@@ -359,8 +345,7 @@ fn traceGrid(rayOrigin: vec3f, rayDirection: vec3f) -> Intersection {
 
     let marchSteps: u32 = 48u;
     var previousT = tRange.x;
-    var previousPoint = rayOrigin + rayDirection * previousT;
-    var previousDelta = gridSurfaceDelta(previousPoint);
+    var previousDelta = gridSurfaceDelta(rayOrigin + rayDirection * previousT);
 
     for (var stepIndex: u32 = 1u; stepIndex <= marchSteps; stepIndex = stepIndex + 1u) {
         let t = mix(tRange.x, tRange.y, f32(stepIndex) / f32(marchSteps));
@@ -393,7 +378,6 @@ fn traceGrid(rayOrigin: vec3f, rayDirection: vec3f) -> Intersection {
         }
 
         previousT = t;
-        previousPoint = point;
         previousDelta = delta;
     }
 
@@ -562,7 +546,7 @@ fn segmentSphereIntersection(
         return emptyIntersection();
     }
 
-    return Intersection(true, dist, segmentStart + direction * dist, color);
+    return Intersection(true, dist, color);
 }
 
 fn sampleDisc(point: vec3f) -> vec3f {
@@ -590,7 +574,7 @@ fn discIntersectionAtPoint(point: vec3f, dist: f32) -> Intersection {
         return emptyIntersection();
     }
 
-    return Intersection(true, dist, point, sampleDisc(point));
+    return Intersection(true, dist, sampleDisc(point));
 }
 
 fn segmentDiscIntersection(segmentStart: vec3f, segmentEnd: vec3f) -> Intersection {
@@ -637,7 +621,7 @@ fn raySphereIntersection(rayOrigin: vec3f, rayDirection: vec3f, center: vec3f, r
         return emptyIntersection();
     }
 
-    return Intersection(true, dist, rayOrigin + rayDirection * dist, color);
+    return Intersection(true, dist, color);
 }
 
 fn rayDiscIntersection(rayOrigin: vec3f, rayDirection: vec3f) -> Intersection {
@@ -667,14 +651,12 @@ fn closestIntersection(current: Intersection, candidate: Intersection) -> Inters
     return current;
 }
 
-fn traceStraight(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
+fn traceRayIntersections(rayOrigin: vec3f, rayDirection: vec3f, blackholeRadius: f32) -> Intersection {
     let blackholePos = scene.blackhole.xyz;
-    let schwarzschildRadius = scene.blackhole.w;
-    let shadowRadius = blackholeShadowRadius(schwarzschildRadius);
     let sphereCount = u32(scene.screen.w);
 
     var hit = emptyIntersection();
-    hit = closestIntersection(hit, raySphereIntersection(rayOrigin, rayDirection, blackholePos, shadowRadius, vec3f(0.0)));
+    hit = closestIntersection(hit, raySphereIntersection(rayOrigin, rayDirection, blackholePos, blackholeRadius, vec3f(0.0)));
     for (var sphereIndex: u32 = 0u; sphereIndex < sphereCount; sphereIndex = sphereIndex + 1u) {
         let sphere = spheres[sphereIndex];
         hit = closestIntersection(
@@ -688,7 +670,34 @@ fn traceStraight(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
             ),
         );
     }
-    hit = closestIntersection(hit, rayDiscIntersection(rayOrigin, rayDirection));
+    return closestIntersection(hit, rayDiscIntersection(rayOrigin, rayDirection));
+}
+
+fn traceSegmentIntersections(segmentStart: vec3f, segmentEnd: vec3f, blackholeRadius: f32) -> Intersection {
+    let blackholePos = scene.blackhole.xyz;
+    let sphereCount = u32(scene.screen.w);
+
+    var hit = emptyIntersection();
+    hit = closestIntersection(hit, segmentSphereIntersection(segmentStart, segmentEnd, blackholePos, blackholeRadius, vec3f(0.0)));
+    for (var sphereIndex: u32 = 0u; sphereIndex < sphereCount; sphereIndex = sphereIndex + 1u) {
+        let sphere = spheres[sphereIndex];
+        hit = closestIntersection(
+            hit,
+            segmentSphereIntersection(
+                segmentStart,
+                segmentEnd,
+                sphere.posRadius.xyz,
+                sphere.posRadius.w,
+                sphere.emission.xyz,
+            ),
+        );
+    }
+    return closestIntersection(hit, segmentDiscIntersection(segmentStart, segmentEnd));
+}
+
+fn traceStraight(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
+    let shadowRadius = blackholeShadowRadius(scene.blackhole.w);
+    let hit = traceRayIntersections(rayOrigin, rayDirection, shadowRadius);
 
     if (!hit.collided) {
         return TraceResult(false, vec3f(0.0));
@@ -701,7 +710,6 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
     let blackholePos = scene.blackhole.xyz;
     let schwarzschildRadius = scene.blackhole.w;
     let captureRadius = schwarzschildRadius * 1.035;
-    let sphereCount = u32(scene.screen.w);
     let localOrigin = rayOrigin - blackholePos;
     let orbitalPlane = buildOrbitalPlane(localOrigin, rayDirection);
     var geodesicRay = planarGeodesicRay(localOrigin, rayDirection, orbitalPlane, schwarzschildRadius, captureRadius);
@@ -728,23 +736,7 @@ fn traceGeodesic(rayOrigin: vec3f, rayDirection: vec3f) -> TraceResult {
         }
 
         let currentWorldPoint = worldPointPlanar(geodesicRay, orbitalPlane, blackholePos);
-
-        var hit = emptyIntersection();
-        hit = closestIntersection(hit, segmentSphereIntersection(previousWorldPoint, currentWorldPoint, blackholePos, captureRadius, vec3f(0.0)));
-        for (var sphereIndex: u32 = 0u; sphereIndex < sphereCount; sphereIndex = sphereIndex + 1u) {
-            let sphere = spheres[sphereIndex];
-            hit = closestIntersection(
-                hit,
-                segmentSphereIntersection(
-                    previousWorldPoint,
-                    currentWorldPoint,
-                    sphere.posRadius.xyz,
-                    sphere.posRadius.w,
-                    sphere.emission.xyz,
-                ),
-            );
-        }
-        hit = closestIntersection(hit, segmentDiscIntersection(previousWorldPoint, currentWorldPoint));
+        let hit = traceSegmentIntersections(previousWorldPoint, currentWorldPoint, captureRadius);
 
         if (hit.collided) {
             return TraceResult(true, hit.color);
@@ -812,10 +804,3 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
 
     return vec4f(sampleBackground(screenUv, rayDirection), 1.0);
 }
-
-/*
-@fragment
-fn gridFsMain() -> @location(0) vec4f {
-    return vec4f(scene.gridLineColor.xyz, 1.0);
-}
-*/
