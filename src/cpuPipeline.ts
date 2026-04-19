@@ -242,6 +242,7 @@ const sampleGradientBackground = (u: number, v: number, worldObjects: renderObje
 
 const sampleStarField = (direction: Vector3, worldObjects: renderObjects): Vector3 => {
     const background = worldObjects.background;
+    const starDensityBoost = 2.0;
     const skyUv = vec3(
         Math.atan2(direction.z, direction.x) / (2.0 * Math.PI) + 0.5,
         Math.acos(Math.max(-1, Math.min(1, direction.y))) / Math.PI,
@@ -251,23 +252,33 @@ const sampleStarField = (direction: Vector3, worldObjects: renderObjects): Vecto
     const milkyWayWidth = Math.max(background.stars.milkyWayWidth, 1e-4);
     const planeDist = Math.abs(dot(direction, milkyWayNormal));
     const milkyWayBand = Math.exp(-((planeDist / milkyWayWidth) ** 2));
+    const milkyWayRidgeBand = Math.exp(-((planeDist / (milkyWayWidth * 0.14)) ** 2));
     const milkyWayNoise = 0.55 + 0.45 * hash21(skyUv.x * 220.0, skyUv.y * 110.0);
-    const milkyWayStrength = milkyWayBand * milkyWayNoise * (background.stars.milkyWayVisible ? background.stars.milkyWayIntensity : 0);
+    const milkyWayIntensity = background.stars.milkyWayVisible ? background.stars.milkyWayIntensity : 0;
+    const milkyWayStrength = milkyWayBand * milkyWayNoise * milkyWayIntensity;
     const milkyWayCoreStrength = milkyWayStrength * (0.45 + 1.25 * milkyWayBand);
+    const milkyWayBaseColor = lerpColor(
+        vec3(background.stars.milkyWayColor.r, background.stars.milkyWayColor.g, background.stars.milkyWayColor.b),
+        vec3(255, 255 * 0.985, 255 * 0.94),
+        0.88,
+    );
+    const milkyWayRidgeStrength =
+        milkyWayRidgeBand *
+        (0.58 + 0.92 * hash21(skyUv.x * 460.0 + 13.0, skyUv.y * 28.0 + 5.0)) *
+        milkyWayIntensity;
 
     let color = vec3(background.stars.baseColor.r, background.stars.baseColor.g, background.stars.baseColor.b);
     color = add(
         color,
-        mul(
-            vec3(background.stars.milkyWayColor.r, background.stars.milkyWayColor.g, background.stars.milkyWayColor.b),
-            milkyWayStrength,
-        ),
+        mul(milkyWayBaseColor, milkyWayStrength),
     );
+    color = add(color, mul(vec3(255, 255, 255), milkyWayRidgeStrength));
 
     const primaryUvX = skyUv.x * 720.0;
     const primaryUvY = skyUv.y * 360.0;
     const primaryBaseX = Math.floor(primaryUvX);
     const primaryBaseY = Math.floor(primaryUvY);
+    const primaryDensity = Math.min(0.56, background.stars.densityPrimary * starDensityBoost + milkyWayCoreStrength * 0.085);
 
     for (let oy = -1; oy <= 1; oy++) {
         for (let ox = -1; ox <= 1; ox++) {
@@ -277,7 +288,7 @@ const sampleStarField = (direction: Vector3, worldObjects: renderObjects): Vecto
             const localY = primaryUvY - cellY - 0.5;
             const primarySeed = hash21(cellX, cellY);
 
-            if (primarySeed > 1.0 - Math.min(0.28, background.stars.densityPrimary + milkyWayCoreStrength * 0.085)) {
+            if (primarySeed > 1.0 - primaryDensity) {
                 const offset = hash22(cellX, cellY);
                 const starDist = Math.hypot(localX - (offset.x - 0.5) * 0.7, localY - (offset.y - 0.5) * 0.7);
                 const glow = Math.max(0.0, Math.min(1.0, (0.14 - starDist) / 0.14));
@@ -302,6 +313,7 @@ const sampleStarField = (direction: Vector3, worldObjects: renderObjects): Vecto
     const secondaryUvY = skyUv.y * 600.0;
     const secondaryBaseX = Math.floor(secondaryUvX);
     const secondaryBaseY = Math.floor(secondaryUvY);
+    const secondaryDensity = Math.min(0.44, background.stars.densitySecondary * starDensityBoost + milkyWayCoreStrength * 0.05);
 
     for (let oy = -1; oy <= 1; oy++) {
         for (let ox = -1; ox <= 1; ox++) {
@@ -311,7 +323,7 @@ const sampleStarField = (direction: Vector3, worldObjects: renderObjects): Vecto
             const localY = secondaryUvY - cellY - 0.5;
             const secondarySeed = hash21(cellX + 211.0, cellY + 503.0);
 
-            if (secondarySeed > 1.0 - Math.min(0.22, background.stars.densitySecondary + milkyWayCoreStrength * 0.05)) {
+            if (secondarySeed > 1.0 - secondaryDensity) {
                 const offset = vec3(hash21(cellX + 5.2, cellY + 91.7), hash21(cellX + 29.6, cellY + 13.4), 0);
                 const starDist = Math.hypot(localX - (offset.x - 0.5) * 0.5, localY - (offset.y - 0.5) * 0.5);
                 const glow = Math.max(0.0, Math.min(1.0, (0.06 - starDist) / 0.06));
@@ -324,6 +336,7 @@ const sampleStarField = (direction: Vector3, worldObjects: renderObjects): Vecto
     const brightUvY = skyUv.y * 260.0;
     const brightBaseX = Math.floor(brightUvX);
     const brightBaseY = Math.floor(brightUvY);
+    const brightDensity = Math.min(0.24, milkyWayCoreStrength * 0.32);
 
     for (let oy = -1; oy <= 1; oy++) {
         for (let ox = -1; ox <= 1; ox++) {
@@ -333,7 +346,7 @@ const sampleStarField = (direction: Vector3, worldObjects: renderObjects): Vecto
             const localY = brightUvY - cellY - 0.5;
             const brightSeed = hash21(cellX + 401.0, cellY + 887.0);
 
-            if (brightSeed > 1.0 - Math.min(0.12, milkyWayCoreStrength * 0.16)) {
+            if (brightSeed > 1.0 - brightDensity) {
                 const offset = vec3(hash21(cellX + 13.0, cellY + 37.0), hash21(cellX + 71.0, cellY + 19.0), 0);
                 const starDist = Math.hypot(localX - (offset.x - 0.5) * 0.65, localY - (offset.y - 0.5) * 0.65);
                 const glow = Math.max(0.0, Math.min(1.0, (0.18 - starDist) / 0.18));
