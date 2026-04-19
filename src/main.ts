@@ -1,7 +1,7 @@
 import gpuPipelineShaderSource from "./gpuPipeline.wgsl";
 import { cameraForward, cameraRight, cameraUp, orbitCamera, rgb, vec3 } from "./common";
 import { cpuPipeline } from "./cpuPipeline";
-import { createHintPanel } from "./hintPanel";
+import { createHintPanel, createOverlayDialog } from "./hintPanel";
 import {
     handleCameraKeyArrows,
     handleCameraZoomKeys,
@@ -307,6 +307,7 @@ let overlayVisible = readOverlayVisibility();
 const hintPanel = createHintPanel(fpsOverlay, {
     expandInitially: shouldExpandHintPanelInitially(),
 });
+const overlayDialog = createOverlayDialog();
 
 const FPS_OVERLAY_UPDATE_INTERVAL_MS = 250;
 const FPS_FRAME_TIME_SMOOTHING = 0.2;
@@ -314,6 +315,7 @@ const FPS_FRAME_TIME_SMOOTHING = 0.2;
 let fpsLastFrameTime: number | null = null;
 let fpsAverageFrameTimeMs: number | null = null;
 let fpsLastOverlayUpdateTime = 0;
+let renderPipelineProbeInFlight = false;
 
 const reportFrame = (frameTime: number, render: string, computation: string): void => {
     if (fpsLastFrameTime == null) {
@@ -444,9 +446,79 @@ const toggleCanvasDisplayMode = (): void => {
     );
 };
 
-const toggleRenderPipeline = (): void => {
+const switchRenderPipeline = (renderPipeline: RenderPipeline): void => {
     persistMainSimulationReloadState();
-    reloadWithRenderPipeline(activeRenderPipeline === "gpu" ? "cpu" : "gpu", overlayVisible);
+    reloadWithRenderPipeline(renderPipeline, overlayVisible);
+};
+
+const canUseWebGpu = async (): Promise<boolean> => {
+    if (!navigator.gpu) return false;
+
+    try {
+        const adapter = await navigator.gpu.requestAdapter();
+        return adapter != null;
+    } catch {
+        return false;
+    }
+};
+
+const openCpuSwitchDialog = (): void => {
+    overlayDialog.open({
+        title: "Switch to CPU renderer?",
+        message: "Note: CPU rendering is usually much slower.",
+        actions: [
+            {
+                label: "Yes",
+                onSelect: () => {
+                    switchRenderPipeline("cpu");
+                },
+            },
+            {
+                label: "No",
+                onSelect: () => {
+                    overlayDialog.close();
+                },
+            },
+        ],
+        initialActionIndex: 1,
+    });
+};
+
+const openGpuUnavailableDialog = (): void => {
+    overlayDialog.open({
+        title: "GPU renderer unavailable.",
+        message: "WebGPU is not available in this browser or on this device.\nStaying on CPU renderer.",
+        actions: [
+            {
+                label: "Close",
+                onSelect: () => {
+                    overlayDialog.close();
+                },
+            },
+        ],
+        initialActionIndex: 0,
+    });
+};
+
+const toggleRenderPipeline = (): void => {
+    if (overlayDialog.isOpen() || renderPipelineProbeInFlight) return;
+
+    if (activeRenderPipeline === "gpu") {
+        openCpuSwitchDialog();
+        return;
+    }
+
+    renderPipelineProbeInFlight = true;
+    void canUseWebGpu().then((gpuAvailable) => {
+        renderPipelineProbeInFlight = false;
+
+        if (gpuAvailable) {
+            switchRenderPipeline("gpu");
+            return;
+        }
+
+        openGpuUnavailableDialog();
+    });
 };
 
 const toggleOverlayVisibility = (): void => {
@@ -483,6 +555,14 @@ const applyCameraSpinStep = (): boolean => {
 
 const installMainInputHandlers = (): void => {
     window.addEventListener("keydown", (event) => {
+        if (overlayDialog.isOpen()) {
+            if (overlayDialog.handleKeyDown(event)) return;
+            if (!event.altKey && !event.ctrlKey && !event.metaKey) {
+                event.preventDefault();
+            }
+            return;
+        }
+
         const cameraChanged = handleCameraKeyArrows(event, camera);
         const zoomChanged = handleCameraZoomKeys(event, camera, MIN_CAMERA_RADIUS, MAX_CAMERA_RADIUS);
         const computationChanged = handleGeodesicToggleKey(event, worldObjects.renderGeodesic);
@@ -533,7 +613,7 @@ const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
     const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
     let renderQueued = false;
 
-    console.log("WebGPU unavailable. Defaulted to CPU pipeline renderer.");
+    console.log("CPU renderer active.");
     console.log("Run `help()` in the console to see available commands.");
     console.log("Press `2` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
 
