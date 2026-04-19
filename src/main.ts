@@ -290,19 +290,58 @@ let hiddenSpheres: renderObjects["spheres"] | null = null;
 const gpuSceneData = new Float32Array(25 * 4);
 const GPU_SPHERE_FLOATS = 8;
 
+const styleOverlayPanel = (panel: HTMLDivElement): void => {
+    panel.style.position = "fixed";
+    panel.style.padding = "6px 8px";
+    panel.style.background = "rgba(0, 0, 0, 0.65)";
+    panel.style.color = "#ffffff";
+    panel.style.fontFamily = "monospace";
+    panel.style.fontSize = "12px";
+    panel.style.whiteSpace = "pre";
+    panel.style.zIndex = "9999";
+};
+
 const fpsOverlay = document.createElement("div");
-fpsOverlay.style.position = "fixed";
+styleOverlayPanel(fpsOverlay);
 fpsOverlay.style.top = "8px";
 fpsOverlay.style.left = "8px";
-fpsOverlay.style.padding = "6px 8px";
-fpsOverlay.style.background = "rgba(0, 0, 0, 0.65)";
-fpsOverlay.style.color = "#ffffff";
-fpsOverlay.style.fontFamily = "monospace";
-fpsOverlay.style.fontSize = "12px";
-fpsOverlay.style.whiteSpace = "pre";
-fpsOverlay.style.zIndex = "9999";
 fpsOverlay.textContent = "FPS: --\nFrame: --\nRender: --\nComputation: --";
 document.body.appendChild(fpsOverlay);
+
+const sourceOverlay = document.createElement("div");
+styleOverlayPanel(sourceOverlay);
+sourceOverlay.style.top = "8px";
+sourceOverlay.style.right = "8px";
+sourceOverlay.style.whiteSpace = "normal";
+sourceOverlay.style.textAlign = "right";
+
+const sourceOverlayTitle = document.createElement("div");
+sourceOverlayTitle.textContent = "Source code:";
+
+const styleOverlayLink = (link: HTMLAnchorElement): void => {
+    link.style.display = "block";
+    link.style.color = "rgba(255, 255, 255, 0.92)";
+    link.style.textDecoration = "underline";
+};
+
+const githubLabel = document.createElement("a");
+githubLabel.textContent = "Github";
+githubLabel.href = "https://github.com/hexontos/rendering-black-hole";
+githubLabel.target = "_blank";
+githubLabel.rel = "noreferrer";
+githubLabel.style.marginTop = "2px";
+styleOverlayLink(githubLabel);
+
+const codebergLabel = document.createElement("a");
+codebergLabel.textContent = "Codeberg";
+codebergLabel.href = "https://codeberg.org/0x_ontos/rendering-black-hole";
+codebergLabel.target = "_blank";
+codebergLabel.rel = "noreferrer";
+styleOverlayLink(codebergLabel);
+
+sourceOverlay.append(sourceOverlayTitle, githubLabel, codebergLabel);
+document.body.appendChild(sourceOverlay);
+
 let overlayVisible = readOverlayVisibility();
 const hintPanel = createHintPanel(fpsOverlay, {
     expandInitially: shouldExpandHintPanelInitially(),
@@ -375,6 +414,7 @@ const MAX_CAMERA_RADIUS = CAMERA_RADIUS * MAX_CAMERA_RADIUS_MULTIPLIER;
 const applyOverlayVisibility = (visible: boolean): void => {
     overlayVisible = visible;
     fpsOverlay.style.display = overlayVisible ? "block" : "none";
+    sourceOverlay.style.display = overlayVisible ? "block" : "none";
     hintPanel.setOverlayVisible(overlayVisible);
 };
 
