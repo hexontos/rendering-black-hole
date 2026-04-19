@@ -177,7 +177,7 @@ const SCHWARZSCHILD_RADIUS = 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2);
 const EVENT_HORIZON_RADIUS = SCHWARZSCHILD_RADIUS;
 const CAMERA_RADIUS = 32 * SCHWARZSCHILD_RADIUS;
 const MIN_CAMERA_RADIUS_DIVISOR = 1.4;
-const MAX_CAMERA_RADIUS_MULTIPLIER = 3.6;
+const MAX_CAMERA_RADIUS_MULTIPLIER = 5;
 const BASE_GEODESIC_STEP = 5e7 * 1.9;
 const BASE_GEODESIC_MAX_STEPS = 2 ** 15;
 const BASE_ESCAPE_RADIUS_MULTIPLIER = 35;
@@ -222,12 +222,12 @@ const grid = {
     visible: true,
     pos: vec3(
         blackHole.pos.x,
-        blackHole.pos.y - 3.8 * SCHWARZSCHILD_RADIUS,
+        blackHole.pos.y - 4 * SCHWARZSCHILD_RADIUS,
         blackHole.pos.z,
     ),
     halfSize: 5 * SCHWARZSCHILD_RADIUS,
     cellSize: 0.35 * SCHWARZSCHILD_RADIUS,
-    maxDrop: 2.8 * SCHWARZSCHILD_RADIUS,
+    maxDrop: 3 * SCHWARZSCHILD_RADIUS,
     lineColor: rgb(255, 255, 255),
 } satisfies Grid;
 
