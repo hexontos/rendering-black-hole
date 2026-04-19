@@ -1,10 +1,10 @@
 import gpuPipelineShaderSource from "./gpuPipeline.wgsl";
 import { cameraForward, cameraRight, cameraUp, orbitCamera, rgb, vec3 } from "./common";
 import { cpuPipeline } from "./cpuPipeline";
-import { gpuGridVertices } from "./gpuGrid";
-import { createHintPanel } from "./hintPanel";
+import { createHintPanel, createOverlayDialog } from "./hintPanel";
 import {
     handleCameraKeyArrows,
+    handleCameraZoomKeys,
     handleGeodesicToggleKey,
     handleCameraMouseDrag,
     handleSceneToggleKeys,
@@ -15,6 +15,7 @@ import type { BlackHole, Camera, Disc, Grid, MouseDrag, WorldConfig, renderObjec
 
 type AppMode = "main" | "sim2d" | "rayRender3d";
 type RenderPipeline = "cpu" | "gpu";
+type CameraSpin = "off" | "right" | "left";
 type MainSimulationReloadState = {
     discVisible: boolean;
     gridVisible: boolean;
@@ -23,6 +24,7 @@ type MainSimulationReloadState = {
     useRungeKutta: boolean;
     cpuRunGeodesic: boolean;
     gpuRunGeodesic: boolean;
+    cameraSpin: CameraSpin;
     spheres: renderObjects["spheres"];
     hiddenSpheres: renderObjects["spheres"] | null;
 };
@@ -32,6 +34,7 @@ const RENDER_PIPELINE_NAME = "blackhole.renderPipeline";
 const CANVAS_DISPLAY_MODE_NAME = "blackhole.canvasDisplayMode";
 const OVERLAY_VISIBILITY_NAME = "blackhole.overlayVisibility";
 const MAIN_SIMULATION_STATE_NAME = "blackhole.mainSimulationState";
+const HINT_PANEL_SKIP_NEXT_EXPAND_NAME = "blackhole.hintPanelSkipNextExpand";
 
 const readAndClearStorageValue = (storage: Storage, name: string): string | null => {
     const value = storage.getItem(name);
@@ -59,7 +62,12 @@ const readRenderPipeline = (): RenderPipeline => {
     return "gpu";
 };
 
+const skipHintPanelStartupExpandOnNextLoad = (): void => {
+    sessionStorage.setItem(HINT_PANEL_SKIP_NEXT_EXPAND_NAME, "skip");
+};
+
 const reloadWithAppMode = (mode: AppMode): void => {
+    skipHintPanelStartupExpandOnNextLoad();
     localStorage.setItem(APP_MODE_NAME, mode);
     window.location.reload();
 };
@@ -90,7 +98,13 @@ const prepareOverlayReloadVisibility = (visible: boolean): void => {
     sessionStorage.removeItem(OVERLAY_VISIBILITY_NAME);
 };
 
+const shouldExpandHintPanelInitially = (): boolean => {
+    const skipNextExpand = readAndClearStorageValue(sessionStorage, HINT_PANEL_SKIP_NEXT_EXPAND_NAME);
+    return skipNextExpand !== "skip";
+};
+
 const reloadWithRenderPipeline = (renderPipeline: RenderPipeline, overlayVisible: boolean): void => {
+    skipHintPanelStartupExpandOnNextLoad();
     prepareOverlayReloadVisibility(overlayVisible);
     localStorage.setItem(APP_MODE_NAME, "main");
     localStorage.setItem(RENDER_PIPELINE_NAME, renderPipeline);
@@ -112,6 +126,7 @@ const reloadWithCanvasDisplayMode = (
     overlayVisible: boolean,
     renderPipeline: RenderPipeline,
 ): void => {
+    skipHintPanelStartupExpandOnNextLoad();
     prepareOverlayReloadVisibility(overlayVisible);
     if (renderPipeline === "cpu") {
         localStorage.setItem(RENDER_PIPELINE_NAME, "cpu");
@@ -162,11 +177,12 @@ const SCHWARZSCHILD_RADIUS = 2.0 * G * SAGITTARIUS_A_MASS / (C ** 2);
 const EVENT_HORIZON_RADIUS = SCHWARZSCHILD_RADIUS;
 const CAMERA_RADIUS = 32 * SCHWARZSCHILD_RADIUS;
 const MIN_CAMERA_RADIUS_DIVISOR = 1.4;
-const MAX_CAMERA_RADIUS_MULTIPLIER = 1.5;
+const MAX_CAMERA_RADIUS_MULTIPLIER = 5;
 const BASE_GEODESIC_STEP = 5e7 * 1.9;
 const BASE_GEODESIC_MAX_STEPS = 2 ** 15;
 const BASE_ESCAPE_RADIUS_MULTIPLIER = 35;
 const REFERENCE_CAMERA_RADIUS = CAMERA_RADIUS;
+const CAMERA_SPIN_STEP = 0.008;
 
 const blackHole = {
     pos: WORLD_CENTER,
@@ -206,12 +222,12 @@ const grid = {
     visible: true,
     pos: vec3(
         blackHole.pos.x,
-        blackHole.pos.y - 3.8 * SCHWARZSCHILD_RADIUS,
+        blackHole.pos.y - 4 * SCHWARZSCHILD_RADIUS,
         blackHole.pos.z,
     ),
-    halfSize: 4.6 * SCHWARZSCHILD_RADIUS,
+    halfSize: 5 * SCHWARZSCHILD_RADIUS,
     cellSize: 0.35 * SCHWARZSCHILD_RADIUS,
-    maxDrop: 2.8 * SCHWARZSCHILD_RADIUS,
+    maxDrop: 3 * SCHWARZSCHILD_RADIUS,
     lineColor: rgb(255, 255, 255),
 } satisfies Grid;
 
@@ -221,7 +237,7 @@ const background = {
         densityPrimary: 0.023,
         densitySecondary: 0.011,
         baseColor: rgb(3, 4, 8),
-        milkyWayVisible: false,
+        milkyWayVisible: true,
         milkyWayNormal: vec3(0.26, 0.9, -0.34),
         milkyWayWidth: 0.17,
         milkyWayIntensity: 0.42,
@@ -256,7 +272,7 @@ const worldObjects: renderObjects = {
             emission: rgb(115, 0, 255),
         },
         {
-            pos: vec3(-30 * SCHWARZSCHILD_RADIUS, -3 * SCHWARZSCHILD_RADIUS, -7*SCHWARZSCHILD_RADIUS),
+            pos: vec3(-60 * SCHWARZSCHILD_RADIUS, -3 * SCHWARZSCHILD_RADIUS, -15*SCHWARZSCHILD_RADIUS),
             radius: 3 * SCHWARZSCHILD_RADIUS,
             emission: rgb(232, 213, 255),
         },
@@ -268,45 +284,99 @@ const runtimeSettings = {
     gpuRunGeodesic: true,
 };
 let activeRenderPipeline: RenderPipeline = "gpu";
+let cameraSpin: CameraSpin = "off";
 let hiddenSpheres: renderObjects["spheres"] | null = null;
 
-const gpuSceneData = new Float32Array(23 * 4);
+const gpuSceneData = new Float32Array(25 * 4);
 const GPU_SPHERE_FLOATS = 8;
 
+const styleOverlayPanel = (panel: HTMLDivElement): void => {
+    panel.style.position = "fixed";
+    panel.style.padding = "6px 8px";
+    panel.style.background = "rgba(0, 0, 0, 0.65)";
+    panel.style.color = "#ffffff";
+    panel.style.fontFamily = "monospace";
+    panel.style.fontSize = "12px";
+    panel.style.whiteSpace = "pre";
+    panel.style.zIndex = "9999";
+};
+
 const fpsOverlay = document.createElement("div");
-fpsOverlay.style.position = "fixed";
+styleOverlayPanel(fpsOverlay);
 fpsOverlay.style.top = "8px";
 fpsOverlay.style.left = "8px";
-fpsOverlay.style.padding = "6px 8px";
-fpsOverlay.style.background = "rgba(0, 0, 0, 0.65)";
-fpsOverlay.style.color = "#ffffff";
-fpsOverlay.style.fontFamily = "monospace";
-fpsOverlay.style.fontSize = "12px";
-fpsOverlay.style.whiteSpace = "pre";
-fpsOverlay.style.zIndex = "9999";
-fpsOverlay.textContent = "FPS: --\nRender: --\nComputation: --";
+fpsOverlay.textContent = "FPS: --\nFrame: --\nRender: --\nComputation: --";
 document.body.appendChild(fpsOverlay);
+
+const sourceOverlay = document.createElement("div");
+styleOverlayPanel(sourceOverlay);
+sourceOverlay.style.top = "8px";
+sourceOverlay.style.right = "8px";
+sourceOverlay.style.whiteSpace = "normal";
+sourceOverlay.style.textAlign = "right";
+
+const sourceOverlayTitle = document.createElement("div");
+sourceOverlayTitle.textContent = "Source code:";
+
+const styleOverlayLink = (link: HTMLAnchorElement): void => {
+    link.style.display = "block";
+    link.style.color = "rgba(255, 255, 255, 0.92)";
+    link.style.textDecoration = "underline";
+};
+
+const githubLabel = document.createElement("a");
+githubLabel.textContent = "Github";
+githubLabel.href = "https://github.com/hexontos/rendering-black-hole";
+githubLabel.target = "_blank";
+githubLabel.rel = "noreferrer";
+githubLabel.style.marginTop = "2px";
+styleOverlayLink(githubLabel);
+
+const codebergLabel = document.createElement("a");
+codebergLabel.textContent = "Codeberg";
+codebergLabel.href = "https://codeberg.org/0x_ontos/rendering-black-hole";
+codebergLabel.target = "_blank";
+codebergLabel.rel = "noreferrer";
+styleOverlayLink(codebergLabel);
+
+sourceOverlay.append(sourceOverlayTitle, githubLabel, codebergLabel);
+document.body.appendChild(sourceOverlay);
+
 let overlayVisible = readOverlayVisibility();
-const hintPanel = createHintPanel(fpsOverlay);
+const hintPanel = createHintPanel(fpsOverlay, {
+    expandInitially: shouldExpandHintPanelInitially(),
+});
+const overlayDialog = createOverlayDialog();
 
-let fpsFrames = 0;
-let fpsLastTime = performance.now();
+const FPS_OVERLAY_UPDATE_INTERVAL_MS = 250;
+const FPS_FRAME_TIME_SMOOTHING = 0.2;
 
-const reportFrame = (render: string, computation: string): void => {
-    fpsFrames += 1;
-    const now = performance.now();
-    const elapsed = now - fpsLastTime;
+let fpsLastFrameTime: number | null = null;
+let fpsAverageFrameTimeMs: number | null = null;
+let fpsLastOverlayUpdateTime = 0;
+let renderPipelineProbeInFlight = false;
 
-    if (elapsed >= 1000) {
-        const fps = fpsFrames * 1000 / elapsed;
-        fpsOverlay.textContent = `FPS: ${fps.toFixed(1)} (approx.)\nRender: ${render}\nComputation: ${computation}`;
-        fpsFrames = 0;
-        fpsLastTime = now;
+const reportFrame = (frameTime: number, render: string, computation: string): void => {
+    if (fpsLastFrameTime == null) {
+        fpsLastFrameTime = frameTime;
+        return;
     }
+
+    const frameTimeMs = Math.max(frameTime - fpsLastFrameTime, 1);
+    fpsLastFrameTime = frameTime;
+    fpsAverageFrameTimeMs = fpsAverageFrameTimeMs == null
+        ? frameTimeMs
+        : fpsAverageFrameTimeMs + (frameTimeMs - fpsAverageFrameTimeMs) * FPS_FRAME_TIME_SMOOTHING;
+
+    if (frameTime - fpsLastOverlayUpdateTime < FPS_OVERLAY_UPDATE_INTERVAL_MS) return;
+
+    fpsLastOverlayUpdateTime = frameTime;
+    const fps = 1000 / fpsAverageFrameTimeMs;
+    fpsOverlay.textContent = `FPS: ${fps.toFixed(1)}\nFrame: ${fpsAverageFrameTimeMs.toFixed(1)} ms\nRender: ${render}\nComputation: ${computation}`;
 };
 
 const currentComputationLabel = (runGeodesic: boolean): string => {
-    if (!runGeodesic) return "Straight ray";
+    if (!runGeodesic) return "Straight rays";
     return worldObjects.renderGeodesic.useRungeKutta ? "Geodesic (Runge-Kutta)" : "Geodesic (Fast)";
 };
 
@@ -344,6 +414,7 @@ const MAX_CAMERA_RADIUS = CAMERA_RADIUS * MAX_CAMERA_RADIUS_MULTIPLIER;
 const applyOverlayVisibility = (visible: boolean): void => {
     overlayVisible = visible;
     fpsOverlay.style.display = overlayVisible ? "block" : "none";
+    sourceOverlay.style.display = overlayVisible ? "block" : "none";
     hintPanel.setOverlayVisible(overlayVisible);
 };
 
@@ -360,6 +431,9 @@ const applyMainSimulationReloadState = (mainSimulationReloadState: MainSimulatio
     worldObjects.spheres = mainSimulationReloadState.spheres;
     runtimeSettings.cpuRunGeodesic = mainSimulationReloadState.cpuRunGeodesic;
     runtimeSettings.gpuRunGeodesic = mainSimulationReloadState.gpuRunGeodesic;
+    cameraSpin = mainSimulationReloadState.cameraSpin === "right" || mainSimulationReloadState.cameraSpin === "left"
+        ? mainSimulationReloadState.cameraSpin
+        : "off";
     hiddenSpheres = mainSimulationReloadState.hiddenSpheres;
 };
 
@@ -372,6 +446,7 @@ const persistMainSimulationReloadState = (): void => {
         useRungeKutta: worldObjects.renderGeodesic.useRungeKutta,
         cpuRunGeodesic: runtimeSettings.cpuRunGeodesic,
         gpuRunGeodesic: runtimeSettings.gpuRunGeodesic,
+        cameraSpin,
         spheres: worldObjects.spheres,
         hiddenSpheres,
     };
@@ -411,28 +486,136 @@ const toggleCanvasDisplayMode = (): void => {
     );
 };
 
-const toggleRenderPipeline = (): void => {
+const switchRenderPipeline = (renderPipeline: RenderPipeline): void => {
     persistMainSimulationReloadState();
-    reloadWithRenderPipeline(activeRenderPipeline === "gpu" ? "cpu" : "gpu", overlayVisible);
+    reloadWithRenderPipeline(renderPipeline, overlayVisible);
+};
+
+const canUseWebGpu = async (): Promise<boolean> => {
+    if (!navigator.gpu) return false;
+
+    try {
+        const adapter = await navigator.gpu.requestAdapter();
+        return adapter != null;
+    } catch {
+        return false;
+    }
+};
+
+const openCpuSwitchDialog = (): void => {
+    overlayDialog.open({
+        title: "Switch to CPU renderer?",
+        message: "Note: CPU rendering is usually much slower.",
+        actions: [
+            {
+                label: "Yes",
+                onSelect: () => {
+                    switchRenderPipeline("cpu");
+                },
+            },
+            {
+                label: "No",
+                onSelect: () => {
+                    overlayDialog.close();
+                },
+            },
+        ],
+        initialActionIndex: 1,
+    });
+};
+
+const openGpuUnavailableDialog = (): void => {
+    overlayDialog.open({
+        title: "GPU renderer unavailable.",
+        message: "WebGPU is not available in this browser or on this device.\nStaying on CPU renderer.",
+        actions: [
+            {
+                label: "Close",
+                onSelect: () => {
+                    overlayDialog.close();
+                },
+            },
+        ],
+        initialActionIndex: 0,
+    });
+};
+
+const toggleRenderPipeline = (): void => {
+    if (overlayDialog.isOpen() || renderPipelineProbeInFlight) return;
+
+    if (activeRenderPipeline === "gpu") {
+        openCpuSwitchDialog();
+        return;
+    }
+
+    renderPipelineProbeInFlight = true;
+    void canUseWebGpu().then((gpuAvailable) => {
+        renderPipelineProbeInFlight = false;
+
+        if (gpuAvailable) {
+            switchRenderPipeline("gpu");
+            return;
+        }
+
+        openGpuUnavailableDialog();
+    });
 };
 
 const toggleOverlayVisibility = (): void => {
     applyOverlayVisibility(!overlayVisible);
 };
 
+const toggleCameraSpin = (): void => {
+    if (cameraSpin === "off") {
+        cameraSpin = "right";
+        return;
+    }
+
+    if (cameraSpin === "right") {
+        cameraSpin = "left";
+        return;
+    }
+
+    cameraSpin = "off";
+};
+
+const applyCameraSpinStep = (): boolean => {
+    if (cameraSpin === "right") {
+        camera.yaw -= CAMERA_SPIN_STEP;
+        return true;
+    }
+
+    if (cameraSpin === "left") {
+        camera.yaw += CAMERA_SPIN_STEP;
+        return true;
+    }
+
+    return false;
+};
+
 const installMainInputHandlers = (): void => {
     window.addEventListener("keydown", (event) => {
+        if (overlayDialog.isOpen()) {
+            if (overlayDialog.handleKeyDown(event)) return;
+            if (!event.altKey && !event.ctrlKey && !event.metaKey) {
+                event.preventDefault();
+            }
+            return;
+        }
+
         const cameraChanged = handleCameraKeyArrows(event, camera);
+        const zoomChanged = handleCameraZoomKeys(event, camera, MIN_CAMERA_RADIUS, MAX_CAMERA_RADIUS);
         const computationChanged = handleGeodesicToggleKey(event, worldObjects.renderGeodesic);
         const sceneChanged = handleSceneToggleKeys(event, worldObjects, {
             toggleRenderPipeline,
             toggleCanvasSize: toggleCanvasDisplayMode,
             toggleSpheres: toggleSphereVisibility,
             toggleGeodesicEnabled,
+            toggleCameraSpin,
             toggleOverlayVisibility,
         });
 
-        if (cameraChanged || computationChanged || sceneChanged) {
+        if (cameraChanged || zoomChanged || computationChanged || sceneChanged) {
             requestMainRender();
         }
     });
@@ -470,14 +653,17 @@ const initCpuRenderer = (canvas: HTMLCanvasElement): void => {
     const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
     let renderQueued = false;
 
-    console.log("WebGPU unavailable. Defaulted to CPU pipeline renderer.");
+    console.log("CPU renderer active.");
     console.log("Run `help()` in the console to see available commands.");
-    console.log("Press `1` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
+    console.log("Press `2` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
 
-    const renderFrame = (): void => {
+    const renderFrame = (frameTime: number): void => {
         renderQueued = false;
         cpuPipeline(ctx, image, camera, currentWorldObjects(camera), worldConf, runtimeSettings.cpuRunGeodesic);
-        reportFrame("CPU", currentComputationLabel(runtimeSettings.cpuRunGeodesic));
+        reportFrame(frameTime, "CPU", currentComputationLabel(runtimeSettings.cpuRunGeodesic));
+        if (applyCameraSpinStep()) {
+            requestMainRender();
+        }
     };
 
     requestMainRender = () => {
@@ -521,11 +707,6 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             size: Math.max(worldObjects.spheres.length * GPU_SPHERE_FLOATS * Float32Array.BYTES_PER_ELEMENT, 4 * Float32Array.BYTES_PER_ELEMENT),
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
-        let gridVertexBuffer = device.createBuffer({
-            size: 8,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-        });
-
         const sceneBindGroupLayout = device.createBindGroupLayout({
             entries: [
                 {
@@ -549,22 +730,6 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             bindGroupLayouts: [sceneBindGroupLayout],
         });
 
-        const backgroundPipeline = device.createRenderPipeline({
-            layout: scenePipelineLayout,
-            vertex: {
-                module: shader,
-                entryPoint: "vsMain",
-            },
-            fragment: {
-                module: shader,
-                entryPoint: "backgroundFsMain",
-                targets: [{ format }],
-            },
-            primitive: {
-                topology: "triangle-list",
-            },
-        });
-
         const pipeline = device.createRenderPipeline({
             layout: scenePipelineLayout,
             vertex: {
@@ -578,34 +743,6 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             },
             primitive: {
                 topology: "triangle-list",
-            },
-        });
-
-        const gridPipeline = device.createRenderPipeline({
-            layout: scenePipelineLayout,
-            vertex: {
-                module: shader,
-                entryPoint: "gridVsMain",
-                buffers: [
-                    {
-                        arrayStride: 8,
-                        attributes: [
-                            {
-                                shaderLocation: 0,
-                                offset: 0,
-                                format: "float32x2",
-                            },
-                        ],
-                    },
-                ],
-            },
-            fragment: {
-                module: shader,
-                entryPoint: "gridFsMain",
-                targets: [{ format }],
-            },
-            primitive: {
-                topology: "line-list",
             },
         });
 
@@ -629,7 +766,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
 
         let renderQueued = false;
 
-        const frame = (): void => {
+        const frame = (frameTime: number): void => {
             renderQueued = false;
             const renderWorldObjects = currentWorldObjects(camera);
             const cameraPos = orbitCamera(camera);
@@ -637,7 +774,6 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
             const right = cameraRight(forward);
             const up = cameraUp(forward, right);
             const sphereData = new Float32Array(Math.max(renderWorldObjects.spheres.length * GPU_SPHERE_FLOATS, 4));
-            const gridVertices = gpuGridVertices(camera, renderWorldObjects, SCREEN_WIDTH, SCREEN_HEIGHT);
 
             for (let sphereIndex = 0; sphereIndex < renderWorldObjects.spheres.length; sphereIndex++) {
                 const sphere = renderWorldObjects.spheres[sphereIndex];
@@ -676,13 +812,6 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 });
             }
 
-            if (gridVertexBuffer.size !== gridVertices.byteLength && gridVertices.byteLength > 0) {
-                gridVertexBuffer = device.createBuffer({
-                    size: gridVertices.byteLength,
-                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-                });
-            }
-
             gpuSceneData.set([cameraPos.x, cameraPos.y, cameraPos.z, 0], 0);
             gpuSceneData.set([forward.x, forward.y, forward.z, 0], 4);
             gpuSceneData.set([right.x, right.y, right.z, 0], 8);
@@ -715,78 +844,82 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                 0,
             ], 40);
             gpuSceneData.set([renderWorldObjects.grid.lineColor.r / 255, renderWorldObjects.grid.lineColor.g / 255, renderWorldObjects.grid.lineColor.b / 255, 0], 44);
+            gpuSceneData.set([renderWorldObjects.grid.pos.x, renderWorldObjects.grid.pos.y, renderWorldObjects.grid.pos.z, 0], 48);
+            gpuSceneData.set([
+                renderWorldObjects.grid.halfSize,
+                renderWorldObjects.grid.cellSize,
+                renderWorldObjects.grid.maxDrop,
+                renderWorldObjects.grid.visible ? 1 : 0,
+            ], 52);
             gpuSceneData.set([
                 gpuBackgroundModeValue(renderWorldObjects.background.mode),
                 renderWorldObjects.background.stars.densityPrimary,
                 renderWorldObjects.background.stars.densitySecondary,
                 0,
-            ], 48);
+            ], 56);
             gpuSceneData.set([
                 renderWorldObjects.background.stars.baseColor.r / 255,
                 renderWorldObjects.background.stars.baseColor.g / 255,
                 renderWorldObjects.background.stars.baseColor.b / 255,
                 0,
-            ], 52);
+            ], 60);
             gpuSceneData.set([
                 renderWorldObjects.background.empty.color.r / 255,
                 renderWorldObjects.background.empty.color.g / 255,
                 renderWorldObjects.background.empty.color.b / 255,
                 0,
-            ], 56);
+            ], 64);
             gpuSceneData.set([
                 renderWorldObjects.background.gradient.topLeft.r / 255,
                 renderWorldObjects.background.gradient.topLeft.g / 255,
                 renderWorldObjects.background.gradient.topLeft.b / 255,
                 0,
-            ], 60);
+            ], 68);
             gpuSceneData.set([
                 renderWorldObjects.background.gradient.topRight.r / 255,
                 renderWorldObjects.background.gradient.topRight.g / 255,
                 renderWorldObjects.background.gradient.topRight.b / 255,
                 0,
-            ], 64);
+            ], 72);
             gpuSceneData.set([
                 renderWorldObjects.background.gradient.bottomLeft.r / 255,
                 renderWorldObjects.background.gradient.bottomLeft.g / 255,
                 renderWorldObjects.background.gradient.bottomLeft.b / 255,
                 0,
-            ], 68);
+            ], 76);
             gpuSceneData.set([
                 renderWorldObjects.background.gradient.bottomRight.r / 255,
                 renderWorldObjects.background.gradient.bottomRight.g / 255,
                 renderWorldObjects.background.gradient.bottomRight.b / 255,
                 0,
-            ], 72);
+            ], 80);
             gpuSceneData.set([
                 renderWorldObjects.background.stars.milkyWayNormal.x,
                 renderWorldObjects.background.stars.milkyWayNormal.y,
                 renderWorldObjects.background.stars.milkyWayNormal.z,
                 renderWorldObjects.background.stars.milkyWayWidth,
-            ], 76);
+            ], 84);
             gpuSceneData.set([
                 renderWorldObjects.background.stars.milkyWayColor.r / 255,
                 renderWorldObjects.background.stars.milkyWayColor.g / 255,
                 renderWorldObjects.background.stars.milkyWayColor.b / 255,
                 renderWorldObjects.background.stars.milkyWayVisible ? renderWorldObjects.background.stars.milkyWayIntensity : 0,
-            ], 80);
+            ], 88);
             gpuSceneData.set([
                 renderWorldObjects.renderGeodesic.dλ,
                 renderWorldObjects.renderGeodesic.maxSteps,
                 renderWorldObjects.renderGeodesic.escapeRadiusMultiplier,
                 runtimeSettings.gpuRunGeodesic ? 1 : 0,
-            ], 84);
+            ], 92);
             gpuSceneData.set([
                 renderWorldObjects.renderGeodesic.useRungeKutta ? 1 : 0,
                 0,
                 0,
                 0,
-            ], 88);
+            ], 96);
 
             device.queue.writeBuffer(uniformBuffer, 0, gpuSceneData);
             device.queue.writeBuffer(sphereBuffer, 0, sphereData);
-            if (gridVertices.byteLength > 0) {
-                device.queue.writeBuffer(gridVertexBuffer, 0, gridVertices);
-            }
 
             const encoder = device.createCommandEncoder();
             const view = context.getCurrentTexture().createView();
@@ -801,23 +934,16 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
                     },
                 ],
             });
-
-            pass.setPipeline(backgroundPipeline);
-            pass.setBindGroup(0, bindGroup);
-            pass.draw(3);
-            if (gridVertices.length > 0) {
-                pass.setPipeline(gridPipeline);
-                pass.setBindGroup(0, bindGroup);
-                pass.setVertexBuffer(0, gridVertexBuffer);
-                pass.draw(gridVertices.length / 2);
-            }
             pass.setPipeline(pipeline);
             pass.setBindGroup(0, bindGroup);
             pass.draw(3);
             pass.end();
 
             device.queue.submit([encoder.finish()]);
-            reportFrame("GPU", currentComputationLabel(runtimeSettings.gpuRunGeodesic));
+            reportFrame(frameTime, "GPU", currentComputationLabel(runtimeSettings.gpuRunGeodesic));
+            if (applyCameraSpinStep()) {
+                requestMainRender();
+            }
         };
 
         requestMainRender = () => {
@@ -828,7 +954,7 @@ const initWebGpuRenderer = async (canvas: HTMLCanvasElement): Promise<boolean> =
 
         console.log("WebGPU renderer active. GPU goes brbrbrbr....");
         console.log("Run `help()` in the console to see available commands.");
-        console.log("Press `1` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
+        console.log("Press `2` to toggle between Geodesic (Fast) and Geodesic (Runge-Kutta).");
         requestMainRender();
         return true;
     } catch (error) {
