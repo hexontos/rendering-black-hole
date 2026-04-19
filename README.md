@@ -39,6 +39,7 @@ npm run dev # starts the build/watch loop and serves the app through live-server
 4. Add textures and reflections to objects, plus an orbiting system.<br>
 5. Cache rendered objects for a speed improvement.<br>
 6. Add a simple scene editor UI.<br>
+7. Add sound design.
 </small>
 
 ## 📚 References
