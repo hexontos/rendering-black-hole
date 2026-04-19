@@ -6,7 +6,7 @@
 </p>
 
 ## 📖 About
-<p>The project is an experimental render of a black hole, where gravity bends space around itself so much that even light becomes visibly distorted.</p>
+<p>The project is an experimental render of a black hole, where gravity bends space around itself so much that even reflected light becomes visibly distorted in space.</p>
 
 <p>If we place a black hole in front of a star, it distorts the light from it so much that it looks like it bends the star and carves itself into it. 
 If we add a disc ring of hot matter around the black hole, it bends the light coming from it such that it displays a new ring on a new axis and has a second inner ring.</p>
@@ -32,14 +32,13 @@ npm run dev # starts the build/watch loop and serves the app through live-server
 
 <p><big>The project is pretty much done for me, but these are some improvements I might do in the future:</big></p>
 
-<p>
+<small>
 1. Rewrite the CPU pipeline into WASM (AssemblyScript), including the grid.<br>
-2. Apply geodesics (distortion) to the background.<br>
-3. Add translucency and movement to the disc.<br>
-4. Add textures and reflections to objects, plus an orbiting system.<br>
-5. Cache rendered objects for a speed improvement.<br>
-6. Add a simple scene editor UI.
-</p>
+2. Add translucency and movement to the disc.<br>
+3. Add textures and reflections to objects, plus an orbiting system.<br>
+4. Cache rendered objects for a speed improvement.<br>
+5. Add a simple scene editor UI.<br>
+</small>
 
 ## 📚 References
 <small>
