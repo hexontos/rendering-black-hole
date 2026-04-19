@@ -34,10 +34,12 @@ npm run dev # starts the build/watch loop and serves the app through live-server
 
 <small>
 1. Rewrite the CPU pipeline into WASM (AssemblyScript), including the grid.<br>
-2. Add translucency and movement to the disc.<br>
-3. Add textures and reflections to objects, plus an orbiting system.<br>
-4. Cache rendered objects for a speed improvement.<br>
-5. Add a simple scene editor UI.<br>
+2. Enhance Milkyway and star noise.<br>
+3. Add translucency and movement to the disc.<br>
+4. Add textures and reflections to objects, plus an orbiting system.<br>
+5. Cache rendered objects for a speed improvement.<br>
+6. Add a simple scene editor UI.<br>
+7. Add sound design.
 </small>
 
 ## 📚 References

@@ -124,20 +124,29 @@ fn hash22(p: vec2f) -> vec2f {
 
 fn sampleStarField(direction: vec3f) -> vec3f {
     let skyUv = backgroundUvFromDirection(direction);
+    let starDensityBoost = 2.0;
 
     var color = scene.backgroundStarsColor.xyz;
     let milkyWayNormal = normalize(scene.backgroundMilkyWayParams.xyz);
     let milkyWayWidth = max(scene.backgroundMilkyWayParams.w, 1e-4);
     let planeDist = abs(dot(direction, milkyWayNormal));
     let milkyWayBand = exp(-pow(planeDist / milkyWayWidth, 2.0));
+    let milkyWayRidgeBand = exp(-pow(planeDist / (milkyWayWidth * 0.14), 2.0));
     let milkyWayNoise = 0.55 + 0.45 * hash21(skyUv * vec2f(220.0, 110.0));
     let milkyWayStrength = milkyWayBand * milkyWayNoise * scene.backgroundMilkyWayColor.w;
     let milkyWayCoreStrength = milkyWayStrength * (0.45 + 1.25 * milkyWayBand);
+    let milkyWayBaseColor = lerpColor(scene.backgroundMilkyWayColor.xyz, vec3f(1.0, 0.985, 0.94), 0.88);
+    let milkyWayRidgeStrength =
+        milkyWayRidgeBand *
+        (0.58 + 0.92 * hash21(vec2f(skyUv.x * 460.0 + 13.0, skyUv.y * 28.0 + 5.0))) *
+        scene.backgroundMilkyWayColor.w;
 
-    color = color + scene.backgroundMilkyWayColor.xyz * milkyWayStrength;
+    color = color + milkyWayBaseColor * milkyWayStrength;
+    color = color + vec3f(1.0, 1.0, 1.0) * milkyWayRidgeStrength;
 
     let primaryUv = skyUv * vec2f(720.0, 360.0);
     let primaryBaseCell = floor(primaryUv);
+    let primaryDensity = clamp(scene.backgroundParams.y * starDensityBoost + milkyWayCoreStrength * 0.085, 0.0, 0.56);
 
     for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
         for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
@@ -145,7 +154,7 @@ fn sampleStarField(direction: vec3f) -> vec3f {
             let primaryLocal = primaryUv - primaryCell - vec2f(0.5);
             let primarySeed = hash21(primaryCell);
 
-            if (primarySeed > 1.0 - clamp(scene.backgroundParams.y + milkyWayCoreStrength * 0.085, 0.0, 0.28)) {
+            if (primarySeed > 1.0 - primaryDensity) {
                 let starOffset = (hash22(primaryCell) - vec2f(0.5)) * 0.7;
                 let starDist = length(primaryLocal - starOffset);
                 let glow = smoothstep(0.14, 0.0, starDist);
@@ -165,6 +174,7 @@ fn sampleStarField(direction: vec3f) -> vec3f {
 
     let secondaryUv = skyUv * vec2f(1200.0, 600.0);
     let secondaryBaseCell = floor(secondaryUv);
+    let secondaryDensity = clamp(scene.backgroundParams.z * starDensityBoost + milkyWayCoreStrength * 0.05, 0.0, 0.44);
 
     for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
         for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
@@ -172,7 +182,7 @@ fn sampleStarField(direction: vec3f) -> vec3f {
             let secondaryLocal = secondaryUv - secondaryCell - vec2f(0.5);
             let secondarySeed = hash21(secondaryCell + vec2f(211.0, 503.0));
 
-            if (secondarySeed > 1.0 - clamp(scene.backgroundParams.z + milkyWayCoreStrength * 0.05, 0.0, 0.22)) {
+            if (secondarySeed > 1.0 - secondaryDensity) {
                 let starOffset = (hash22(secondaryCell + vec2f(5.2, 91.7)) - vec2f(0.5)) * 0.5;
                 let starDist = length(secondaryLocal - starOffset);
                 let glow = smoothstep(0.06, 0.0, starDist);
@@ -183,6 +193,7 @@ fn sampleStarField(direction: vec3f) -> vec3f {
 
     let milkyWayBrightUv = skyUv * vec2f(520.0, 260.0);
     let milkyWayBrightBaseCell = floor(milkyWayBrightUv);
+    let brightDensity = clamp(milkyWayCoreStrength * 0.32, 0.0, 0.24);
 
     for (var oy: i32 = -1; oy <= 1; oy = oy + 1) {
         for (var ox: i32 = -1; ox <= 1; ox = ox + 1) {
@@ -190,7 +201,7 @@ fn sampleStarField(direction: vec3f) -> vec3f {
             let brightLocal = milkyWayBrightUv - brightCell - vec2f(0.5);
             let brightSeed = hash21(brightCell + vec2f(401.0, 887.0));
 
-            if (brightSeed > 1.0 - clamp(milkyWayCoreStrength * 0.16, 0.0, 0.12)) {
+            if (brightSeed > 1.0 - brightDensity) {
                 let starOffset = (hash22(brightCell + vec2f(13.0, 37.0)) - vec2f(0.5)) * 0.65;
                 let starDist = length(brightLocal - starOffset);
                 let glow = smoothstep(0.18, 0.0, starDist);
