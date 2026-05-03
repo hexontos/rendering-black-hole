@@ -1,6 +1,6 @@
 const HINT_PANEL_STYLE_ID = "blackhole-hint-panel-style";
 
-const INITIAL_EXPANDED_DURATION_MS = 3000;
+const INITIAL_EXPANDED_DURATION_MS = 6000;
 
 const ensureHintPanelStyles = (): void => {
     if (document.getElementById(HINT_PANEL_STYLE_ID) != null) return;
